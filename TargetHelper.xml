@@ -15,11 +15,6 @@
                         <Offset x="0" y="0"/>
                     </Anchor>
                 </Anchors>
-                <Color r="1.0" g="0.5" b="0.0" a="0.7"/>
-                <Gradient orientation="VERTICAL">
-                    <MinColor r="1.0" g="0.5" b="0.0" a="0.7"/>
-                    <MaxColor r="1.0" g="0.5" b="0.0" a="0.0"/>
-                </Gradient>
             </Texture>
 
             <!-- Bottom Edge -->
@@ -30,11 +25,6 @@
                         <Offset x="0" y="0"/>
                     </Anchor>
                 </Anchors>
-                <Color r="1.0" g="0.5" b="0.0" a="0.7"/>
-                <Gradient orientation="VERTICAL">
-                    <MinColor r="1.0" g="0.5" b="0.0" a="0.0"/>
-                    <MaxColor r="1.0" g="0.5" b="0.0" a="0.7"/>
-                </Gradient>
             </Texture>
 
             <!-- Left Edge -->
@@ -45,11 +35,6 @@
                         <Offset x="0" y="0"/>
                     </Anchor>
                 </Anchors>
-                <Color r="1.0" g="0.5" b="0.0" a="0.7"/>
-                <Gradient orientation="HORIZONTAL">
-                    <MinColor r="1.0" g="0.5" b="0.0" a="0.7"/>
-                    <MaxColor r="1.0" g="0.5" b="0.0" a="0.0"/>
-                </Gradient>
             </Texture>
 
             <!-- Right Edge -->
@@ -60,11 +45,6 @@
                         <Offset x="0" y="0"/>
                     </Anchor>
                 </Anchors>
-                <Color r="1.0" g="0.5" b="0.0" a="0.7"/>
-                <Gradient orientation="HORIZONTAL">
-                    <MinColor r="1.0" g="0.5" b="0.0" a="0.0"/>
-                    <MaxColor r="1.0" g="0.5" b="0.0" a="0.7"/>
-                </Gradient>
             </Texture>
         </Layer>
     </Frame>

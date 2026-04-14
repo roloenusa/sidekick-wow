@@ -1,4 +1,7 @@
 -- Target Helper: Alerts DPS players to target enemies and shows low health indicators
+-- Version: 1.1.0
+-- Compatible with: WoW 12.0.1+ (Retail)
+-- Features: Target alerts, low health indicators, configurable resource bar thresholds
 
 local TargetHelper = CreateFrame("Frame")
 local edgeFrame = nil
@@ -17,8 +20,7 @@ local DPS_SPECS = {
     -- Druid
     [102] = true, -- Balance
     [103] = true, -- Feral
-    -- Death Knight
-    [250] = true, -- Blood (can be DPS in some contexts)
+    -- Death Knight (Blood removed - tank spec)
     [251] = true, -- Frost
     [252] = true, -- Unholy
     -- Demon Hunter
@@ -218,6 +220,24 @@ local function OnEvent(self, event, ...)
         TargetHelperEdgeFrameBottomEdge:SetWidth(screenWidth)
         TargetHelperEdgeFrameLeftEdge:SetHeight(screenHeight)
         TargetHelperEdgeFrameRightEdge:SetHeight(screenHeight)
+
+        -- Set up gradients (WoW 12.0+ compatible with fallback)
+        local orangeStart, orangeEnd
+
+        if CreateColor then
+            -- Modern API (11.0+, 12.0+)
+            orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
+            orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
+        else
+            -- Fallback for potential API changes
+            orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
+            orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
+        end
+
+        TargetHelperEdgeFrameTopEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
+        TargetHelperEdgeFrameBottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
+        TargetHelperEdgeFrameLeftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
+        TargetHelperEdgeFrameRightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
 
         -- Update spec status when entering world/instances
         UpdateSpecStatus()

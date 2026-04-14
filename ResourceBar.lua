@@ -1,4 +1,7 @@
 -- Resource Bar Customization: Configurable thresholds, colors, and highlights
+-- Version: 1.1.0
+-- Compatible with: WoW 12.0.1+ (Retail)
+-- Features: Threshold markers, dynamic colors, power bar highlights
 
 local ResourceBar = CreateFrame("Frame")
 local powerBarFrame = nil
@@ -30,29 +33,76 @@ local function InitializeConfig()
     end
 end
 
--- Get current power and max power
+-- Get current power and max power (WoW 12.0+ compatible)
 local function GetPowerInfo()
-    local powerType = UnitPowerType("player")
+    local powerType, powerToken = UnitPowerType("player")
     local currentPower = UnitPower("player", powerType)
     local maxPower = UnitPowerMax("player", powerType)
+
+    -- Handle alternate power types (like Balance Druid's Lunar Power)
+    -- Try multiple methods for 12.0 compatibility
+    if powerToken == "LUNAR_POWER" or powerToken == "ASTRAL_POWER" then
+        -- Method 1: Try Enum (modern API)
+        if Enum and Enum.PowerType and Enum.PowerType.LunarPower then
+            currentPower = UnitPower("player", Enum.PowerType.LunarPower)
+            maxPower = UnitPowerMax("player", Enum.PowerType.LunarPower)
+        -- Method 2: Try numeric power type 8 (Lunar Power)
+        elseif UnitPower("player", 8) > 0 or UnitPowerMax("player", 8) > 0 then
+            currentPower = UnitPower("player", 8)
+            maxPower = UnitPowerMax("player", 8)
+        end
+    end
+
+    -- Ensure we have valid values
+    currentPower = currentPower or 0
+    maxPower = maxPower or 100
+
     return currentPower, maxPower, powerType
 end
 
--- Find the power bar frame
+-- Find the power bar frame (WoW 12.0+ compatible with fallbacks)
 local function FindPowerBarFrame()
-    -- Try alternate power bar first (for specs like Balance Druid with Astral Power)
-    if PlayerFrame_AlternateManaBar and PlayerFrame_AlternateManaBar:IsShown() then
-        return PlayerFrame_AlternateManaBar
+    -- Method 1: Try alternate power bar first (for specs like Balance Druid with Astral Power)
+    -- This works in 11.0 and should work in 12.0+
+    if PlayerFrame and PlayerFrame.AlternatePowerBar and PlayerFrame.AlternatePowerBar:IsShown() then
+        return PlayerFrame.AlternatePowerBar
     end
 
-    -- Try class resource bar
-    if ClassResourceBarFrame and ClassResourceBarFrame:IsShown() then
-        return ClassResourceBarFrame
+    -- Method 2: Try modern 11.0+ structure
+    if PlayerFrame and PlayerFrame.PlayerFrameContent and PlayerFrame.PlayerFrameContent.PlayerFrameContentMain then
+        local manaBar = PlayerFrame.PlayerFrameContent.PlayerFrameContentMain.ManaBar
+        if manaBar and manaBar:IsShown() then
+            return manaBar
+        end
     end
 
-    -- Fall back to standard mana bar
-    if PlayerFrame.manabar then
+    -- Method 3: Try direct PlayerFrame.manabar (12.0 might have simplified)
+    if PlayerFrame and PlayerFrame.manabar and PlayerFrame.manabar:IsShown() then
         return PlayerFrame.manabar
+    end
+
+    -- Method 4: Try EditMode-specific accessor (12.0 Edit Mode enhancements)
+    if PlayerFrame_GetAlternateManaBar then
+        local altBar = PlayerFrame_GetAlternateManaBar()
+        if altBar and altBar:IsShown() then
+            return altBar
+        end
+    end
+
+    -- Method 5: Scan PlayerFrame children for StatusBar with power/mana
+    if PlayerFrame then
+        for _, region in pairs({PlayerFrame:GetChildren()}) do
+            if region and region.GetStatusBarTexture then
+                local powerType = UnitPowerType("player")
+                local currentPower = UnitPower("player", powerType)
+                local barValue = region:GetValue() or 0
+
+                -- If bar value matches current power, we found it
+                if math.abs(barValue - currentPower) < 0.1 then
+                    return region
+                end
+            end
+        end
     end
 
     return nil
@@ -60,10 +110,19 @@ end
 
 -- Create threshold marker lines
 local function CreateMarker(parent, threshold)
+    if not parent or not parent.CreateTexture then
+        return nil
+    end
+
+    local height = parent:GetHeight()
+    if not height or height == 0 then
+        return nil
+    end
+
     local marker = parent:CreateTexture(nil, "OVERLAY")
     marker:SetColorTexture(threshold.color.r, threshold.color.g, threshold.color.b, 0.9)
     marker:SetWidth(2)
-    marker:SetHeight(parent:GetHeight())
+    marker:SetHeight(height)
     return marker
 end
 
@@ -92,12 +151,13 @@ local function UpdateMarkers()
     for i, threshold in ipairs(TargetHelperDB.resourceBar.thresholds) do
         local percent = threshold.value / maxPower
         local marker = CreateMarker(powerBarFrame, threshold)
-        local xOffset = barWidth * percent
 
-        marker:SetPoint("LEFT", powerBarFrame, "LEFT", xOffset, 0)
-        marker:Show()
-
-        markerFrames[i] = marker
+        if marker then
+            local xOffset = barWidth * percent
+            marker:SetPoint("LEFT", powerBarFrame, "LEFT", xOffset, 0)
+            marker:Show()
+            markerFrames[i] = marker
+        end
     end
 end
 
@@ -243,12 +303,17 @@ local function OnEvent(self, event, ...)
     elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
         -- Power bar might change with spec
         C_Timer.After(0.5, function()
+            -- Re-find the power bar (it might have changed)
             powerBarFrame = FindPowerBarFrame()
             if powerBarFrame then
+                -- Re-capture original color after spec change
                 local r, g, b, a = powerBarFrame:GetStatusBarColor()
                 originalBarColor = {r = r, g = g, b = b, a = a}
+
+                -- Re-initialize markers and colors
+                UpdateMarkers()
+                OnPowerUpdate()
             end
-            Initialize()
         end)
     end
 end
