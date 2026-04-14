@@ -1,0 +1,9 @@
+## Interface: 110002
+## Title: Target Helper
+## Notes: Alerts DPS players to target enemies and shows when targets are low health
+## Author: Sodastereo
+## Version: 1.0.0
+## SavedVariables: TargetHelperDB
+
+TargetHelper.xml
+TargetHelper.lua
