@@ -7,3 +7,4 @@
 
 TargetHelper.xml
 TargetHelper.lua
+ResourceBar.lua
