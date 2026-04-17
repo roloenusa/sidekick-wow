@@ -1,9 +1,9 @@
--- Target Helper: Alerts DPS players to target enemies and shows low health indicators
+-- Sidekick: Alerts DPS players to target enemies and shows low health indicators
 -- Version: 1.1.0
--- Compatible with: WoW 12.0.5+ (Retail)
+-- Compatible with: WoW 12.0.1+ (The War Within)
 -- Features: Target alerts, low health indicators, configurable resource bar thresholds
 
-local TargetHelper = CreateFrame("Frame")
+local Sidekick = CreateFrame("Frame")
 local edgeFrame = nil
 local lastWarningTime = 0
 local WARNING_COOLDOWN = 3 -- seconds between warnings
@@ -74,28 +74,28 @@ end
 
 -- Enable target tracking events
 local function EnableTargetTracking()
-    TargetHelper:RegisterEvent("PLAYER_TARGET_CHANGED")
-    TargetHelper:RegisterUnitEvent("UNIT_HEALTH", "target")  -- Only fire for target unit
-    TargetHelper:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
+    Sidekick:RegisterUnitEvent("UNIT_HEALTH", "target")  -- Only fire for target unit
+    Sidekick:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 end
 
 -- Disable target tracking events
 local function DisableTargetTracking()
-    TargetHelper:UnregisterEvent("PLAYER_TARGET_CHANGED")
-    TargetHelper:UnregisterEvent("UNIT_HEALTH")
-    TargetHelper:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    Sidekick:UnregisterEvent("PLAYER_TARGET_CHANGED")
+    Sidekick:UnregisterEvent("UNIT_HEALTH")
+    Sidekick:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 end
 
 -- Update event registration based on current state
 function UpdateEventRegistration()
-    if not TargetHelperDB or not TargetHelperDB.enabled or not isDPSSpec then
+    if not SidekickDB or not SidekickDB.enabled or not isDPSSpec then
         DisableTargetTracking()
     elseif inCombat then
         EnableTargetTracking()
     else
         -- When not in combat, keep target change events but unregister UNIT_HEALTH
-        TargetHelper:RegisterEvent("PLAYER_TARGET_CHANGED")
-        TargetHelper:UnregisterEvent("UNIT_HEALTH")
+        Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
+        Sidekick:UnregisterEvent("UNIT_HEALTH")
     end
 end
 
@@ -197,28 +197,28 @@ end
 local function OnEvent(self, event, ...)
     if event == "ADDON_LOADED" then
         local addonName = ...
-        if addonName == "TargetHelper" then
-            print("|cFF00FF00Target Helper loaded!|r Type /targethelper for options.")
+        if addonName == "Sidekick" then
+            print("|cFF00FF00Sidekick loaded!|r Type /sidekick for options.")
 
             -- Initialize saved variables
-            if not TargetHelperDB then
-                TargetHelperDB = {
+            if not SidekickDB then
+                SidekickDB = {
                     enabled = true
                 }
             end
         end
     elseif event == "PLAYER_ENTERING_WORLD" then
         -- Get reference to edge frame
-        edgeFrame = TargetHelperEdgeFrame
+        edgeFrame = SidekickEdgeFrame
 
         -- Set up textures to span full screen width/height
         local screenWidth = GetScreenWidth()
         local screenHeight = GetScreenHeight()
 
-        TargetHelperEdgeFrameTopEdge:SetWidth(screenWidth)
-        TargetHelperEdgeFrameBottomEdge:SetWidth(screenWidth)
-        TargetHelperEdgeFrameLeftEdge:SetHeight(screenHeight)
-        TargetHelperEdgeFrameRightEdge:SetHeight(screenHeight)
+        SidekickEdgeFrameTopEdge:SetWidth(screenWidth)
+        SidekickEdgeFrameBottomEdge:SetWidth(screenWidth)
+        SidekickEdgeFrameLeftEdge:SetHeight(screenHeight)
+        SidekickEdgeFrameRightEdge:SetHeight(screenHeight)
 
         -- Set up gradients (WoW 12.0+ compatible with fallback)
         local orangeStart, orangeEnd
@@ -233,10 +233,10 @@ local function OnEvent(self, event, ...)
             orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
         end
 
-        TargetHelperEdgeFrameTopEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
-        TargetHelperEdgeFrameBottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
-        TargetHelperEdgeFrameLeftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
-        TargetHelperEdgeFrameRightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
+        SidekickEdgeFrameTopEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
+        SidekickEdgeFrameBottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
+        SidekickEdgeFrameLeftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
+        SidekickEdgeFrameRightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
 
         -- Update spec status when entering world/instances
         UpdateSpecStatus()
@@ -259,13 +259,13 @@ local function OnEvent(self, event, ...)
         HideLowHealthGlow()
     elseif event == "PLAYER_TARGET_CHANGED" then
         -- Target changed - check new target
-        if TargetHelperDB and TargetHelperDB.enabled then
+        if SidekickDB and SidekickDB.enabled then
             CheckTargetState()
         end
     elseif event == "UNIT_HEALTH" then
         -- Health changed - check if it's our target
         local unit = ...
-        if unit == "target" and TargetHelperDB and TargetHelperDB.enabled then
+        if unit == "target" and SidekickDB and SidekickDB.enabled then
             CheckTargetState()
         end
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
@@ -274,10 +274,11 @@ local function OnEvent(self, event, ...)
         if subevent == "UNIT_DIED" and destGUID == UnitGUID("target") then
             HideLowHealthGlow()
             -- If still in combat, warn to select new target
-            if inCombat and isDPSSpec and TargetHelperDB and TargetHelperDB.enabled then
+            if inCombat and isDPSSpec and SidekickDB and SidekickDB.enabled then
                 ShowTargetWarning()
             end
         end
+    end
 end
 
 -- Helper to parse color from hex or RGB
@@ -306,9 +307,9 @@ local function ParseColor(colorStr)
 end
 
 -- Slash command handler
-SLASH_TARGETHELPER1 = "/targethelper"
-SLASH_TARGETHELPER2 = "/th"
-SlashCmdList["TARGETHELPER"] = function(msg)
+SLASH_SIDEKICK1 = "/sidekick"
+SLASH_SIDEKICK2 = "/sk"
+SlashCmdList["SIDEKICK"] = function(msg)
     local args = {}
     for word in msg:gmatch("%S+") do
         table.insert(args, word)
@@ -317,11 +318,11 @@ SlashCmdList["TARGETHELPER"] = function(msg)
     local cmd = args[1] and args[1]:lower() or ""
 
     if cmd == "toggle" then
-        TargetHelperDB.enabled = not TargetHelperDB.enabled
-        if TargetHelperDB.enabled then
-            print("|cFF00FF00Target Helper: Enabled|r")
+        SidekickDB.enabled = not SidekickDB.enabled
+        if SidekickDB.enabled then
+            print("|cFF00FF00Sidekick: Enabled|r")
         else
-            print("|cFFFF0000Target Helper: Disabled|r")
+            print("|cFFFF0000Sidekick: Disabled|r")
             HideLowHealthGlow()
         end
         UpdateEventRegistration()
@@ -331,23 +332,23 @@ SlashCmdList["TARGETHELPER"] = function(msg)
         local subcmd = args[2] and args[2]:lower() or ""
 
         if subcmd == "on" or subcmd == "enable" then
-            TargetHelperResourceBar:SetEnabled(true)
+            SidekickResourceBar:SetEnabled(true)
             print("|cFF00FF00Resource Bar customization: Enabled|r")
 
         elseif subcmd == "off" or subcmd == "disable" then
-            TargetHelperResourceBar:SetEnabled(false)
+            SidekickResourceBar:SetEnabled(false)
             print("|cFFFF0000Resource Bar customization: Disabled|r")
 
         elseif subcmd == "add" then
-            -- /th rb add <value> <color> [name]
+            -- /sk rb add <value> <color> [name]
             local value = tonumber(args[3])
             local colorStr = args[4]
             local name = args[5] or ""
 
             if not value or not colorStr then
-                print("|cFFFF0000Usage: /th rb add <value> <color> [name]|r")
-                print("|cFFFFFF00Example: /th rb add 40 #FFFF00 Starsurge|r")
-                print("|cFFFFFF00Example: /th rb add 50 0,0.5,1.0 Starfall|r")
+                print("|cFFFF0000Usage: /sk rb add <value> <color> [name]|r")
+                print("|cFFFFFF00Example: /sk rb add 40 #FFFF00 Starsurge|r")
+                print("|cFFFFFF00Example: /sk rb add 50 0,0.5,1.0 Starfall|r")
                 return
             end
 
@@ -357,25 +358,25 @@ SlashCmdList["TARGETHELPER"] = function(msg)
                 return
             end
 
-            TargetHelperResourceBar:AddThreshold(value, r, g, b, name)
+            SidekickResourceBar:AddThreshold(value, r, g, b, name)
             print(string.format("|cFF00FF00Added threshold: %s at %d|r", name ~= "" and name or "Unnamed", value))
 
         elseif subcmd == "remove" or subcmd == "delete" then
             local index = tonumber(args[3])
             if not index then
-                print("|cFFFF0000Usage: /th rb remove <index>|r")
+                print("|cFFFF0000Usage: /sk rb remove <index>|r")
                 return
             end
 
-            TargetHelperResourceBar:RemoveThreshold(index)
+            SidekickResourceBar:RemoveThreshold(index)
             print("|cFF00FF00Threshold removed|r")
 
         elseif subcmd == "clear" then
-            TargetHelperResourceBar:ClearThresholds()
+            SidekickResourceBar:ClearThresholds()
             print("|cFF00FF00All thresholds cleared|r")
 
         elseif subcmd == "list" then
-            local thresholds = TargetHelperResourceBar:ListThresholds()
+            local thresholds = SidekickResourceBar:ListThresholds()
             if #thresholds == 0 then
                 print("|cFFFFFF00No thresholds configured|r")
             else
@@ -391,50 +392,50 @@ SlashCmdList["TARGETHELPER"] = function(msg)
             end
 
         elseif subcmd == "markers" then
-            local enabled = TargetHelperResourceBar:ToggleFeature("markers")
+            local enabled = SidekickResourceBar:ToggleFeature("markers")
             print("|cFF00FF00Threshold Markers: " .. (enabled and "Enabled" or "Disabled") .. "|r")
 
         elseif subcmd == "colors" then
-            local enabled = TargetHelperResourceBar:ToggleFeature("colors")
+            local enabled = SidekickResourceBar:ToggleFeature("colors")
             print("|cFF00FF00Dynamic Bar Colors: " .. (enabled and "Enabled" or "Disabled") .. "|r")
 
         elseif subcmd == "highlights" then
-            local enabled = TargetHelperResourceBar:ToggleFeature("highlights")
+            local enabled = SidekickResourceBar:ToggleFeature("highlights")
             print("|cFF00FF00Threshold Highlights: " .. (enabled and "Enabled" or "Disabled") .. "|r")
 
         elseif subcmd == "status" then
             print("|cFF00FF00Resource Bar Status:|r")
-            print("  Enabled: " .. (TargetHelperDB.resourceBar.enabled and "|cFF00FF00Yes|r" or "|cFFFF0000No|r"))
-            print("  Markers: " .. (TargetHelperResourceBar:IsFeatureEnabled("markers") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
-            print("  Colors: " .. (TargetHelperResourceBar:IsFeatureEnabled("colors") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
-            print("  Highlights: " .. (TargetHelperResourceBar:IsFeatureEnabled("highlights") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
-            print("  Thresholds: " .. #TargetHelperDB.resourceBar.thresholds)
+            print("  Enabled: " .. (SidekickDB.resourceBar.enabled and "|cFF00FF00Yes|r" or "|cFFFF0000No|r"))
+            print("  Markers: " .. (SidekickResourceBar:IsFeatureEnabled("markers") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
+            print("  Colors: " .. (SidekickResourceBar:IsFeatureEnabled("colors") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
+            print("  Highlights: " .. (SidekickResourceBar:IsFeatureEnabled("highlights") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
+            print("  Thresholds: " .. #SidekickDB.resourceBar.thresholds)
 
         else
             print("|cFF00FF00Resource Bar Commands:|r")
-            print("/th rb on|off - Enable/disable resource bar customization")
-            print("/th rb add <value> <color> [name] - Add threshold")
-            print("/th rb remove <index> - Remove threshold")
-            print("/th rb clear - Clear all thresholds")
-            print("/th rb list - List all thresholds")
-            print("/th rb markers - Toggle threshold markers")
-            print("/th rb colors - Toggle dynamic bar colors")
-            print("/th rb highlights - Toggle threshold highlights")
-            print("/th rb status - Show current configuration")
+            print("/sk rb on|off - Enable/disable resource bar customization")
+            print("/sk rb add <value> <color> [name] - Add threshold")
+            print("/sk rb remove <index> - Remove threshold")
+            print("/sk rb clear - Clear all thresholds")
+            print("/sk rb list - List all thresholds")
+            print("/sk rb markers - Toggle threshold markers")
+            print("/sk rb colors - Toggle dynamic bar colors")
+            print("/sk rb highlights - Toggle threshold highlights")
+            print("/sk rb status - Show current configuration")
             print("|cFFFFFF00Color formats: #FFFF00 or 1.0,1.0,0.0 or 255,255,0|r")
         end
 
     else
-        print("|cFF00FF00Target Helper Commands:|r")
-        print("/th toggle - Enable/disable target alerts")
-        print("/th rb - Resource bar customization (see /th rb for details)")
+        print("|cFF00FF00Sidekick Commands:|r")
+        print("/sk toggle - Enable/disable target alerts")
+        print("/sk rb - Resource bar customization (see /sk rb for details)")
     end
 end
 
 -- Set up core events (target tracking events are registered dynamically)
-TargetHelper:RegisterEvent("ADDON_LOADED")
-TargetHelper:RegisterEvent("PLAYER_ENTERING_WORLD")
-TargetHelper:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-TargetHelper:RegisterEvent("PLAYER_REGEN_DISABLED")  -- Entering combat
-TargetHelper:RegisterEvent("PLAYER_REGEN_ENABLED")   -- Leaving combat
-TargetHelper:SetScript("OnEvent", OnEvent)
+Sidekick:RegisterEvent("ADDON_LOADED")
+Sidekick:RegisterEvent("PLAYER_ENTERING_WORLD")
+Sidekick:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+Sidekick:RegisterEvent("PLAYER_REGEN_DISABLED")  -- Entering combat
+Sidekick:RegisterEvent("PLAYER_REGEN_ENABLED")   -- Leaving combat
+Sidekick:SetScript("OnEvent", OnEvent)

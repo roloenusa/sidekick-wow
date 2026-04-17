@@ -1,6 +1,6 @@
 -- Resource Bar Customization: Configurable thresholds, colors, and highlights
 -- Version: 1.1.0
--- Compatible with: WoW 12.0.5+ (Retail)
+-- Compatible with: WoW 12.0.1+ (The War Within)
 -- Features: Threshold markers, dynamic colors, power bar highlights
 
 local ResourceBar = CreateFrame("Frame")
@@ -16,8 +16,8 @@ local FEATURE_HIGHLIGHTS = "highlights"
 
 -- Initialize default configuration
 local function InitializeConfig()
-    if not TargetHelperDB.resourceBar then
-        TargetHelperDB.resourceBar = {
+    if not SidekickDB.resourceBar then
+        SidekickDB.resourceBar = {
             enabled = false,
             features = {
                 [FEATURE_MARKERS] = true,
@@ -120,7 +120,7 @@ end
 
 -- Update marker positions based on thresholds
 local function UpdateMarkers()
-    if not TargetHelperDB.resourceBar.features[FEATURE_MARKERS] then
+    if not SidekickDB.resourceBar.features[FEATURE_MARKERS] then
         -- Hide all markers
         for _, marker in pairs(markerFrames) do
             marker:Hide()
@@ -140,7 +140,7 @@ local function UpdateMarkers()
     markerFrames = {}
 
     -- Create new markers
-    for i, threshold in ipairs(TargetHelperDB.resourceBar.thresholds) do
+    for i, threshold in ipairs(SidekickDB.resourceBar.thresholds) do
         local percent = threshold.value / maxPower
         local marker = CreateMarker(powerBarFrame, threshold)
 
@@ -158,7 +158,7 @@ local function GetActiveThreshold(currentPower)
     local activeThreshold = nil
 
     -- Find the highest threshold that we've met
-    for _, threshold in ipairs(TargetHelperDB.resourceBar.thresholds) do
+    for _, threshold in ipairs(SidekickDB.resourceBar.thresholds) do
         if currentPower >= threshold.value then
             if not activeThreshold or threshold.value > activeThreshold.value then
                 activeThreshold = threshold
@@ -173,7 +173,7 @@ end
 local function UpdateBarColor(currentPower)
     if not powerBarFrame then return end
 
-    if not TargetHelperDB.resourceBar.features[FEATURE_COLORS] then
+    if not SidekickDB.resourceBar.features[FEATURE_COLORS] then
         -- Restore original color
         if originalBarColor.r then
             powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
@@ -203,7 +203,7 @@ local function CreateHighlightFrame()
 
     if not powerBarFrame then return nil end
 
-    highlightFrame = CreateFrame("Frame", "TargetHelperResourceHighlight", powerBarFrame)
+    highlightFrame = CreateFrame("Frame", "SidekickResourceHighlight", powerBarFrame)
     highlightFrame:SetAllPoints(powerBarFrame)
     highlightFrame:SetFrameStrata("HIGH")
 
@@ -220,7 +220,7 @@ end
 
 -- Update highlight based on current power
 local function UpdateHighlight(currentPower)
-    if not TargetHelperDB.resourceBar.features[FEATURE_HIGHLIGHTS] then
+    if not SidekickDB.resourceBar.features[FEATURE_HIGHLIGHTS] then
         if highlightFrame and highlightFrame.glow then
             highlightFrame.glow:SetAlpha(0)
         end
@@ -249,7 +249,7 @@ end
 
 -- Main update function called when power changes
 local function OnPowerUpdate()
-    if not TargetHelperDB.resourceBar.enabled then return end
+    if not SidekickDB.resourceBar.enabled then return end
 
     local currentPower, maxPower = GetPowerInfo()
 
@@ -278,7 +278,7 @@ end
 -- Event handler
 local function OnEvent(self, event, ...)
     if event == "PLAYER_ENTERING_WORLD" then
-        if TargetHelperDB.resourceBar.enabled then
+        if SidekickDB.resourceBar.enabled then
             C_Timer.After(0.5, Initialize)
         end
     elseif event == "UNIT_POWER_UPDATE" then
@@ -312,18 +312,18 @@ end
 
 -- Add threshold
 function ResourceBar:AddThreshold(value, r, g, b, name)
-    table.insert(TargetHelperDB.resourceBar.thresholds, {
+    table.insert(SidekickDB.resourceBar.thresholds, {
         value = value,
         color = {r = r, g = g, b = b},
         name = name or ("Threshold " .. value)
     })
 
     -- Sort thresholds by value
-    table.sort(TargetHelperDB.resourceBar.thresholds, function(a, b)
+    table.sort(SidekickDB.resourceBar.thresholds, function(a, b)
         return a.value < b.value
     end)
 
-    if TargetHelperDB.resourceBar.enabled then
+    if SidekickDB.resourceBar.enabled then
         UpdateMarkers()
         OnPowerUpdate()
     end
@@ -331,9 +331,9 @@ end
 
 -- Remove threshold
 function ResourceBar:RemoveThreshold(index)
-    table.remove(TargetHelperDB.resourceBar.thresholds, index)
+    table.remove(SidekickDB.resourceBar.thresholds, index)
 
-    if TargetHelperDB.resourceBar.enabled then
+    if SidekickDB.resourceBar.enabled then
         UpdateMarkers()
         OnPowerUpdate()
     end
@@ -341,9 +341,9 @@ end
 
 -- Clear all thresholds
 function ResourceBar:ClearThresholds()
-    TargetHelperDB.resourceBar.thresholds = {}
+    SidekickDB.resourceBar.thresholds = {}
 
-    if TargetHelperDB.resourceBar.enabled then
+    if SidekickDB.resourceBar.enabled then
         UpdateMarkers()
         OnPowerUpdate()
     end
@@ -351,7 +351,7 @@ end
 
 -- Enable/disable resource bar customization
 function ResourceBar:SetEnabled(enabled)
-    TargetHelperDB.resourceBar.enabled = enabled
+    SidekickDB.resourceBar.enabled = enabled
 
     if enabled then
         ResourceBar:RegisterEvent("UNIT_POWER_UPDATE")
@@ -378,24 +378,24 @@ end
 
 -- Toggle feature
 function ResourceBar:ToggleFeature(feature)
-    TargetHelperDB.resourceBar.features[feature] = not TargetHelperDB.resourceBar.features[feature]
+    SidekickDB.resourceBar.features[feature] = not SidekickDB.resourceBar.features[feature]
 
-    if TargetHelperDB.resourceBar.enabled then
+    if SidekickDB.resourceBar.enabled then
         UpdateMarkers()
         OnPowerUpdate()
     end
 
-    return TargetHelperDB.resourceBar.features[feature]
+    return SidekickDB.resourceBar.features[feature]
 end
 
 -- Get feature status
 function ResourceBar:IsFeatureEnabled(feature)
-    return TargetHelperDB.resourceBar.features[feature]
+    return SidekickDB.resourceBar.features[feature]
 end
 
 -- List thresholds
 function ResourceBar:ListThresholds()
-    return TargetHelperDB.resourceBar.thresholds
+    return SidekickDB.resourceBar.thresholds
 end
 
 -- Initialize config when addon loads
@@ -407,4 +407,4 @@ ResourceBar:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 ResourceBar:SetScript("OnEvent", OnEvent)
 
 -- Export
-_G.TargetHelperResourceBar = ResourceBar
+_G.SidekickResourceBar = ResourceBar
