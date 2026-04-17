@@ -1,6 +1,6 @@
 -- Resource Bar Customization: Configurable thresholds, colors, and highlights
 -- Version: 1.1.0
--- Compatible with: WoW 12.0.1+ (Retail)
+-- Compatible with: WoW 12.0.5+ (Retail)
 -- Features: Threshold markers, dynamic colors, power bar highlights
 
 local ResourceBar = CreateFrame("Frame")
@@ -39,14 +39,14 @@ local function GetPowerInfo()
     local currentPower = UnitPower("player", powerType)
     local maxPower = UnitPowerMax("player", powerType)
 
-    -- Handle alternate power types (like Balance Druid's Lunar Power)
+    -- Handle alternate power types (like Balance Druid's Astral Power)
     -- Try multiple methods for 12.0 compatibility
     if powerToken == "LUNAR_POWER" or powerToken == "ASTRAL_POWER" then
         -- Method 1: Try Enum (modern API)
-        if Enum and Enum.PowerType and Enum.PowerType.LunarPower then
-            currentPower = UnitPower("player", Enum.PowerType.LunarPower)
-            maxPower = UnitPowerMax("player", Enum.PowerType.LunarPower)
-        -- Method 2: Try numeric power type 8 (Lunar Power)
+        if Enum and Enum.PowerType and Enum.PowerType.AstralPower then
+            currentPower = UnitPower("player", Enum.PowerType.AstralPower)
+            maxPower = UnitPowerMax("player", Enum.PowerType.AstralPower)
+        -- Method 2: Try numeric power type 8 (Astral Power)
         elseif UnitPower("player", 8) > 0 or UnitPowerMax("player", 8) > 0 then
             currentPower = UnitPower("player", 8)
             maxPower = UnitPowerMax("player", 8)
@@ -81,15 +81,7 @@ local function FindPowerBarFrame()
         return PlayerFrame.manabar
     end
 
-    -- Method 4: Try EditMode-specific accessor (12.0 Edit Mode enhancements)
-    if PlayerFrame_GetAlternateManaBar then
-        local altBar = PlayerFrame_GetAlternateManaBar()
-        if altBar and altBar:IsShown() then
-            return altBar
-        end
-    end
-
-    -- Method 5: Scan PlayerFrame children for StatusBar with power/mana
+    -- Method 4: Scan PlayerFrame children for StatusBar with power/mana
     if PlayerFrame then
         for _, region in pairs({PlayerFrame:GetChildren()}) do
             if region and region.GetStatusBarTexture then

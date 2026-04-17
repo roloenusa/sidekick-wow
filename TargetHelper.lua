@@ -1,6 +1,6 @@
 -- Target Helper: Alerts DPS players to target enemies and shows low health indicators
 -- Version: 1.1.0
--- Compatible with: WoW 12.0.1+ (Retail)
+-- Compatible with: WoW 12.0.5+ (Retail)
 -- Features: Target alerts, low health indicators, configurable resource bar thresholds
 
 local TargetHelper = CreateFrame("Frame")
@@ -20,7 +20,7 @@ local DPS_SPECS = {
     -- Druid
     [102] = true, -- Balance
     [103] = true, -- Feral
-    -- Death Knight (Blood removed - tank spec)
+    -- Death Knight
     [251] = true, -- Frost
     [252] = true, -- Unholy
     -- Demon Hunter
@@ -76,14 +76,14 @@ end
 local function EnableTargetTracking()
     TargetHelper:RegisterEvent("PLAYER_TARGET_CHANGED")
     TargetHelper:RegisterUnitEvent("UNIT_HEALTH", "target")  -- Only fire for target unit
-    TargetHelper:RegisterUnitEvent("UNIT_DIED", "target")    -- Only fire for target unit
+    TargetHelper:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 end
 
 -- Disable target tracking events
 local function DisableTargetTracking()
     TargetHelper:UnregisterEvent("PLAYER_TARGET_CHANGED")
     TargetHelper:UnregisterEvent("UNIT_HEALTH")
-    TargetHelper:UnregisterEvent("UNIT_DIED")
+    TargetHelper:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 end
 
 -- Update event registration based on current state
@@ -95,7 +95,6 @@ function UpdateEventRegistration()
     else
         -- When not in combat, keep target change events but unregister UNIT_HEALTH
         TargetHelper:RegisterEvent("PLAYER_TARGET_CHANGED")
-        TargetHelper:RegisterUnitEvent("UNIT_DIED", "target")
         TargetHelper:UnregisterEvent("UNIT_HEALTH")
     end
 end
@@ -269,18 +268,16 @@ local function OnEvent(self, event, ...)
         if unit == "target" and TargetHelperDB and TargetHelperDB.enabled then
             CheckTargetState()
         end
-    elseif event == "UNIT_DIED" then
-        -- Unit died - check if it's our target
-        local unit = ...
-        if unit == "target" then
+    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        -- Check for target death
+        local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags = CombatLogGetCurrentEventInfo()
+        if subevent == "UNIT_DIED" and destGUID == UnitGUID("target") then
             HideLowHealthGlow()
-
             -- If still in combat, warn to select new target
             if inCombat and isDPSSpec and TargetHelperDB and TargetHelperDB.enabled then
                 ShowTargetWarning()
             end
         end
-    end
 end
 
 -- Helper to parse color from hex or RGB

@@ -1,11 +1,11 @@
-## Interface: 120001
+## Interface: 120005
 ## Title: Target Helper
 ## Notes: Alerts DPS players to target enemies and shows when targets are low health
 ## Author: Sodastereo
 ## Version: 1.1.0
 ## SavedVariables: TargetHelperDB
-## X-MinInterface: 120001
-## X-Compatible-With: 120001
+## X-MinInterface: 120005
+## X-Compatible-With: 120005
 
 TargetHelper.xml
 TargetHelper.lua
