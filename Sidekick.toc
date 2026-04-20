@@ -2,7 +2,7 @@
 ## Title: Sidekick
 ## Notes: Alerts DPS players to target enemies and shows when targets are low health
 ## Author: Sodastereo
-## Version: 1.1.0
+## Version: 2.0.0
 ## SavedVariables: SidekickDB
 ## X-MinInterface: 120001
 ## X-Compatible-With: 120001

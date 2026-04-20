@@ -1,21 +1,38 @@
 -- Sidekick: Alerts DPS players to target enemies and shows low health indicators
--- Version: 1.1.0
+-- Version: 2.0.0
 -- Compatible with: WoW 12.0.1+ (The War Within)
--- Features: Target alerts, low health indicators, configurable resource bar thresholds
+-- Rewritten using DBM/BigWigs patterns for robust event handling
 
-local Sidekick = CreateFrame("Frame")
+-------------------------------------------------------------------------------
+-- Addon Declaration
+-------------------------------------------------------------------------------
+local ADDON_NAME = "Sidekick"
+local Sidekick = CreateFrame("Frame", "SidekickFrame")
+Sidekick:SetScript("OnEvent", function(self, event, ...)
+    if self[event] then
+        self[event](self, ...)
+    end
+end)
+
+-------------------------------------------------------------------------------
+-- Local State
+-------------------------------------------------------------------------------
 local edgeFrame = nil
 local lastWarningTime = 0
-local WARNING_COOLDOWN = 3 -- seconds between warnings
 local lowHealthShown = false
-local isDPSSpec = false -- Cache DPS spec status
-local inCombat = false -- Cache combat status
+local isDPSSpec = false
+local inCombat = false
+local isEnabled = false
+local addonLoaded = false
 
--- Health thresholds with hysteresis to prevent flickering
-local HEALTH_SHOW_THRESHOLD = 10  -- Show glow when health drops to or below this
-local HEALTH_HIDE_THRESHOLD = 12  -- Hide glow when health rises to or above this
+-------------------------------------------------------------------------------
+-- Configuration Constants
+-------------------------------------------------------------------------------
+local WARNING_COOLDOWN = 3 -- seconds between warnings
+local HEALTH_SHOW_THRESHOLD = 10  -- Show glow at or below this %
+local HEALTH_HIDE_THRESHOLD = 12  -- Hide glow at or above this %
 
--- DPS spec role IDs
+-- DPS spec role IDs (validated for WoW 12.0.1)
 local DPS_SPECS = {
     -- Druid
     [102] = true, -- Balance
@@ -58,54 +75,27 @@ local DPS_SPECS = {
     [72] = true, -- Fury
 }
 
--- Update cached DPS spec status
+-------------------------------------------------------------------------------
+-- Helper Functions
+-------------------------------------------------------------------------------
+
+-- Safe check if player is a DPS spec
 local function UpdateSpecStatus()
     local specIndex = GetSpecialization()
     if not specIndex then
         isDPSSpec = false
-        UpdateEventRegistration()
         return
     end
 
     local specID = GetSpecializationInfo(specIndex)
     isDPSSpec = DPS_SPECS[specID] or false
-    UpdateEventRegistration()
-end
-
--- Enable target tracking events
-local function EnableTargetTracking()
-    Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
-    Sidekick:RegisterUnitEvent("UNIT_HEALTH", "target")  -- Only fire for target unit
-    Sidekick:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-end
-
--- Disable target tracking events
-local function DisableTargetTracking()
-    Sidekick:UnregisterEvent("PLAYER_TARGET_CHANGED")
-    Sidekick:UnregisterEvent("UNIT_HEALTH")
-    Sidekick:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-end
-
--- Update event registration based on current state
-function UpdateEventRegistration()
-    if not SidekickDB or not SidekickDB.enabled or not isDPSSpec then
-        DisableTargetTracking()
-    elseif inCombat then
-        EnableTargetTracking()
-    else
-        -- When not in combat, keep target change events but unregister UNIT_HEALTH
-        Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
-        Sidekick:UnregisterEvent("UNIT_HEALTH")
-    end
 end
 
 -- Check if target is a valid enemy
 local function IsValidEnemy()
-    if not UnitExists("target") then
-        return false
-    end
-
-    return UnitCanAttack("player", "target") and not UnitIsDead("target")
+    return UnitExists("target")
+        and UnitCanAttack("player", "target")
+        and not UnitIsDead("target")
 end
 
 -- Get target health percentage
@@ -117,12 +107,14 @@ local function GetTargetHealthPercent()
     local health = UnitHealth("target")
     local maxHealth = UnitHealthMax("target")
 
-    if maxHealth == 0 then return 100 end
+    if not health or not maxHealth or maxHealth == 0 then
+        return 100
+    end
 
     return (health / maxHealth) * 100
 end
 
--- Show warning message and play sound
+-- Show warning message and play sound (with cooldown)
 local function ShowTargetWarning()
     local currentTime = GetTime()
     if currentTime - lastWarningTime < WARNING_COOLDOWN then
@@ -140,29 +132,28 @@ end
 
 -- Show low health edge glow
 local function ShowLowHealthGlow()
-    if not lowHealthShown and edgeFrame then
-        edgeFrame:Show()
-        lowHealthShown = true
+    if lowHealthShown or not edgeFrame then
+        return
     end
+
+    edgeFrame:Show()
+    lowHealthShown = true
 end
 
 -- Hide low health edge glow
 local function HideLowHealthGlow()
-    if lowHealthShown and edgeFrame then
-        edgeFrame:Hide()
-        lowHealthShown = false
+    if not lowHealthShown or not edgeFrame then
+        return
     end
+
+    edgeFrame:Hide()
+    lowHealthShown = false
 end
 
 -- Check current state and update UI
 local function CheckTargetState()
-    -- Only trigger alerts when in combat
-    if not inCombat then
-        HideLowHealthGlow()
-        return
-    end
-
-    if not isDPSSpec then
+    -- Only trigger alerts when in combat and enabled
+    if not inCombat or not isEnabled or not isDPSSpec then
         HideLowHealthGlow()
         return
     end
@@ -170,8 +161,8 @@ local function CheckTargetState()
     -- Check for valid enemy target
     if not IsValidEnemy() then
         HideLowHealthGlow()
+        -- Warn if targeting non-enemy while in combat
         if UnitExists("target") and not UnitIsDead("target") then
-            -- Target exists but is not an enemy
             ShowTargetWarning()
         end
         return
@@ -193,93 +184,179 @@ local function CheckTargetState()
     end
 end
 
--- Event handler
-local function OnEvent(self, event, ...)
-    if event == "ADDON_LOADED" then
-        local addonName = ...
-        if addonName == "Sidekick" then
-            print("|cFF00FF00Sidekick loaded!|r Type /sidekick for options.")
+-------------------------------------------------------------------------------
+-- Event Registration Management (DBM-style)
+-------------------------------------------------------------------------------
 
-            -- Initialize saved variables
-            if not SidekickDB then
-                SidekickDB = {
-                    enabled = true
-                }
-            end
-        end
-    elseif event == "PLAYER_ENTERING_WORLD" then
-        -- Get reference to edge frame
-        edgeFrame = SidekickEdgeFrame
+-- Register combat-specific events (only during combat)
+local function RegisterCombatEvents()
+    if not isEnabled or not isDPSSpec then
+        return
+    end
 
-        -- Set up textures to span full screen width/height
-        local screenWidth = GetScreenWidth()
-        local screenHeight = GetScreenHeight()
+    Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
+    Sidekick:RegisterUnitEvent("UNIT_HEALTH", "target")
+    Sidekick:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+end
 
-        SidekickEdgeFrameTopEdge:SetWidth(screenWidth)
-        SidekickEdgeFrameBottomEdge:SetWidth(screenWidth)
-        SidekickEdgeFrameLeftEdge:SetHeight(screenHeight)
-        SidekickEdgeFrameRightEdge:SetHeight(screenHeight)
+-- Unregister combat-specific events
+local function UnregisterCombatEvents()
+    Sidekick:UnregisterEvent("PLAYER_TARGET_CHANGED")
+    Sidekick:UnregisterEvent("UNIT_HEALTH")
+    Sidekick:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+end
 
-        -- Set up gradients (WoW 12.0+ compatible with fallback)
-        local orangeStart, orangeEnd
+-- Update event registration based on state
+local function UpdateEventRegistration()
+    if not addonLoaded then
+        return
+    end
 
-        if CreateColor then
-            -- Modern API (11.0+, 12.0+)
-            orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
-            orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
-        else
-            -- Fallback for potential API changes
-            orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
-            orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
-        end
+    if inCombat and isEnabled and isDPSSpec then
+        RegisterCombatEvents()
+    else
+        UnregisterCombatEvents()
+    end
+end
 
-        SidekickEdgeFrameTopEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
-        SidekickEdgeFrameBottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
-        SidekickEdgeFrameLeftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
-        SidekickEdgeFrameRightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
+-------------------------------------------------------------------------------
+-- Event Handlers
+-------------------------------------------------------------------------------
 
-        -- Update spec status when entering world/instances
-        UpdateSpecStatus()
+function Sidekick:ADDON_LOADED(addonName)
+    if addonName ~= ADDON_NAME then
+        return
+    end
 
-        -- Update combat status
-        inCombat = UnitAffectingCombat("player")
-        UpdateEventRegistration()
-    elseif event == "PLAYER_SPECIALIZATION_CHANGED" then
-        -- Update spec status when spec changes
-        UpdateSpecStatus()
-    elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Entered combat
-        inCombat = true
-        UpdateEventRegistration()
-        CheckTargetState()
-    elseif event == "PLAYER_REGEN_ENABLED" then
-        -- Left combat
-        inCombat = false
-        UpdateEventRegistration()
+    -- Initialize saved variables
+    if not SidekickDB then
+        SidekickDB = {
+            enabled = true
+        }
+    end
+
+    -- Ensure enabled is a boolean
+    if type(SidekickDB.enabled) ~= "boolean" then
+        SidekickDB.enabled = true
+    end
+
+    isEnabled = SidekickDB.enabled
+    addonLoaded = true
+
+    print("|cFF00FF00Sidekick loaded!|r Type /sidekick for options.")
+
+    -- No need to listen for ADDON_LOADED anymore
+    self:UnregisterEvent("ADDON_LOADED")
+end
+
+function Sidekick:PLAYER_ENTERING_WORLD()
+    -- Get reference to edge frame
+    edgeFrame = _G["SidekickEdgeFrame"]
+
+    if not edgeFrame then
+        print("|cFFFF0000Sidekick Error: Could not find edge frame|r")
+        return
+    end
+
+    -- Set up textures to span full screen
+    local screenWidth = GetScreenWidth()
+    local screenHeight = GetScreenHeight()
+
+    local topEdge = _G["SidekickEdgeFrameTopEdge"]
+    local bottomEdge = _G["SidekickEdgeFrameBottomEdge"]
+    local leftEdge = _G["SidekickEdgeFrameLeftEdge"]
+    local rightEdge = _G["SidekickEdgeFrameRightEdge"]
+
+    if topEdge then topEdge:SetWidth(screenWidth) end
+    if bottomEdge then bottomEdge:SetWidth(screenWidth) end
+    if leftEdge then leftEdge:SetHeight(screenHeight) end
+    if rightEdge then rightEdge:SetHeight(screenHeight) end
+
+    -- Set up gradients (WoW 12.0+ compatible with fallback)
+    local orangeStart, orangeEnd
+
+    if CreateColor then
+        -- Modern API (11.0+, 12.0+)
+        orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
+        orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
+    else
+        -- Fallback for potential API changes
+        orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
+        orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
+    end
+
+    if topEdge then topEdge:SetGradient("VERTICAL", orangeStart, orangeEnd) end
+    if bottomEdge then bottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart) end
+    if leftEdge then leftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd) end
+    if rightEdge then rightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart) end
+
+    -- Update spec and combat status
+    UpdateSpecStatus()
+    inCombat = UnitAffectingCombat("player") or false
+    UpdateEventRegistration()
+end
+
+function Sidekick:PLAYER_SPECIALIZATION_CHANGED()
+    UpdateSpecStatus()
+    UpdateEventRegistration()
+
+    -- If we're no longer a DPS spec, clean up
+    if not isDPSSpec then
         HideLowHealthGlow()
-    elseif event == "PLAYER_TARGET_CHANGED" then
-        -- Target changed - check new target
-        if SidekickDB and SidekickDB.enabled then
-            CheckTargetState()
-        end
-    elseif event == "UNIT_HEALTH" then
-        -- Health changed - check if it's our target
-        local unit = ...
-        if unit == "target" and SidekickDB and SidekickDB.enabled then
-            CheckTargetState()
-        end
-    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        -- Check for target death
-        local timestamp, subevent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags = CombatLogGetCurrentEventInfo()
-        if subevent == "UNIT_DIED" and destGUID == UnitGUID("target") then
+    end
+end
+
+function Sidekick:PLAYER_REGEN_DISABLED()
+    -- Entered combat
+    inCombat = true
+    UpdateEventRegistration()
+    CheckTargetState()
+end
+
+function Sidekick:PLAYER_REGEN_ENABLED()
+    -- Left combat
+    inCombat = false
+    UpdateEventRegistration()
+    HideLowHealthGlow()
+end
+
+function Sidekick:PLAYER_TARGET_CHANGED()
+    if not isEnabled then
+        return
+    end
+    CheckTargetState()
+end
+
+function Sidekick:UNIT_HEALTH(unit)
+    if unit ~= "target" or not isEnabled then
+        return
+    end
+    CheckTargetState()
+end
+
+function Sidekick:COMBAT_LOG_EVENT_UNFILTERED()
+    if not isEnabled then
+        return
+    end
+
+    local _, subevent, _, _, _, _, _, destGUID = CombatLogGetCurrentEventInfo()
+
+    -- Check for target death
+    if subevent == "UNIT_DIED" then
+        local targetGUID = UnitGUID("target")
+        if targetGUID and destGUID == targetGUID then
             HideLowHealthGlow()
             -- If still in combat, warn to select new target
-            if inCombat and isDPSSpec and SidekickDB and SidekickDB.enabled then
+            if inCombat and isDPSSpec then
                 ShowTargetWarning()
             end
         end
     end
 end
+
+-------------------------------------------------------------------------------
+-- Slash Commands
+-------------------------------------------------------------------------------
 
 -- Helper to parse color from hex or RGB
 local function ParseColor(colorStr)
@@ -306,7 +383,6 @@ local function ParseColor(colorStr)
     return nil
 end
 
--- Slash command handler
 SLASH_SIDEKICK1 = "/sidekick"
 SLASH_SIDEKICK2 = "/sk"
 SlashCmdList["SIDEKICK"] = function(msg)
@@ -319,7 +395,9 @@ SlashCmdList["SIDEKICK"] = function(msg)
 
     if cmd == "toggle" then
         SidekickDB.enabled = not SidekickDB.enabled
-        if SidekickDB.enabled then
+        isEnabled = SidekickDB.enabled
+
+        if isEnabled then
             print("|cFF00FF00Sidekick: Enabled|r")
         else
             print("|cFFFF0000Sidekick: Disabled|r")
@@ -332,12 +410,20 @@ SlashCmdList["SIDEKICK"] = function(msg)
         local subcmd = args[2] and args[2]:lower() or ""
 
         if subcmd == "on" or subcmd == "enable" then
-            SidekickResourceBar:SetEnabled(true)
-            print("|cFF00FF00Resource Bar customization: Enabled|r")
+            if SidekickResourceBar then
+                SidekickResourceBar:SetEnabled(true)
+                print("|cFF00FF00Resource Bar customization: Enabled|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "off" or subcmd == "disable" then
-            SidekickResourceBar:SetEnabled(false)
-            print("|cFFFF0000Resource Bar customization: Disabled|r")
+            if SidekickResourceBar then
+                SidekickResourceBar:SetEnabled(false)
+                print("|cFFFF0000Resource Bar customization: Disabled|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "add" then
             -- /sk rb add <value> <color> [name]
@@ -358,8 +444,12 @@ SlashCmdList["SIDEKICK"] = function(msg)
                 return
             end
 
-            SidekickResourceBar:AddThreshold(value, r, g, b, name)
-            print(string.format("|cFF00FF00Added threshold: %s at %d|r", name ~= "" and name or "Unnamed", value))
+            if SidekickResourceBar then
+                SidekickResourceBar:AddThreshold(value, r, g, b, name)
+                print(string.format("|cFF00FF00Added threshold: %s at %d|r", name ~= "" and name or "Unnamed", value))
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "remove" or subcmd == "delete" then
             local index = tonumber(args[3])
@@ -368,42 +458,74 @@ SlashCmdList["SIDEKICK"] = function(msg)
                 return
             end
 
-            SidekickResourceBar:RemoveThreshold(index)
-            print("|cFF00FF00Threshold removed|r")
+            if SidekickResourceBar then
+                SidekickResourceBar:RemoveThreshold(index)
+                print("|cFF00FF00Threshold removed|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "clear" then
-            SidekickResourceBar:ClearThresholds()
-            print("|cFF00FF00All thresholds cleared|r")
+            if SidekickResourceBar then
+                SidekickResourceBar:ClearThresholds()
+                print("|cFF00FF00All thresholds cleared|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "list" then
+            if not SidekickResourceBar then
+                print("|cFFFF0000Resource Bar module not loaded|r")
+                return
+            end
+
             local thresholds = SidekickResourceBar:ListThresholds()
-            if #thresholds == 0 then
+            if not thresholds or #thresholds == 0 then
                 print("|cFFFFFF00No thresholds configured|r")
             else
                 print("|cFF00FF00Configured Thresholds:|r")
                 for i, t in ipairs(thresholds) do
-                    local colorHex = string.format("#%02X%02X%02X",
-                        math.floor(t.color.r * 255),
-                        math.floor(t.color.g * 255),
-                        math.floor(t.color.b * 255))
-                    print(string.format("|cFFFFFF00%d.|r %s (value: %d, color: %s)",
-                        i, t.name, t.value, colorHex))
+                    if t and t.color then
+                        local colorHex = string.format("#%02X%02X%02X",
+                            math.floor((t.color.r or 0) * 255),
+                            math.floor((t.color.g or 0) * 255),
+                            math.floor((t.color.b or 0) * 255))
+                        print(string.format("|cFFFFFF00%d.|r %s (value: %d, color: %s)",
+                            i, t.name or "Unnamed", t.value or 0, colorHex))
+                    end
                 end
             end
 
         elseif subcmd == "markers" then
-            local enabled = SidekickResourceBar:ToggleFeature("markers")
-            print("|cFF00FF00Threshold Markers: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            if SidekickResourceBar then
+                local enabled = SidekickResourceBar:ToggleFeature("markers")
+                print("|cFF00FF00Threshold Markers: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "colors" then
-            local enabled = SidekickResourceBar:ToggleFeature("colors")
-            print("|cFF00FF00Dynamic Bar Colors: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            if SidekickResourceBar then
+                local enabled = SidekickResourceBar:ToggleFeature("colors")
+                print("|cFF00FF00Dynamic Bar Colors: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "highlights" then
-            local enabled = SidekickResourceBar:ToggleFeature("highlights")
-            print("|cFF00FF00Threshold Highlights: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            if SidekickResourceBar then
+                local enabled = SidekickResourceBar:ToggleFeature("highlights")
+                print("|cFF00FF00Threshold Highlights: " .. (enabled and "Enabled" or "Disabled") .. "|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
 
         elseif subcmd == "status" then
+            if not SidekickResourceBar or not SidekickDB or not SidekickDB.resourceBar then
+                print("|cFFFF0000Resource Bar module not loaded or not initialized|r")
+                return
+            end
+
             print("|cFF00FF00Resource Bar Status:|r")
             print("  Enabled: " .. (SidekickDB.resourceBar.enabled and "|cFF00FF00Yes|r" or "|cFFFF0000No|r"))
             print("  Markers: " .. (SidekickResourceBar:IsFeatureEnabled("markers") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
@@ -432,10 +554,11 @@ SlashCmdList["SIDEKICK"] = function(msg)
     end
 end
 
--- Set up core events (target tracking events are registered dynamically)
+-------------------------------------------------------------------------------
+-- Initialize Core Events
+-------------------------------------------------------------------------------
 Sidekick:RegisterEvent("ADDON_LOADED")
 Sidekick:RegisterEvent("PLAYER_ENTERING_WORLD")
 Sidekick:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-Sidekick:RegisterEvent("PLAYER_REGEN_DISABLED")  -- Entering combat
-Sidekick:RegisterEvent("PLAYER_REGEN_ENABLED")   -- Leaving combat
-Sidekick:SetScript("OnEvent", OnEvent)
+Sidekick:RegisterEvent("PLAYER_REGEN_DISABLED")
+Sidekick:RegisterEvent("PLAYER_REGEN_ENABLED")
