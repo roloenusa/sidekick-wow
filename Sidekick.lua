@@ -1,7 +1,7 @@
 -- Sidekick: Alerts DPS players to target enemies and shows low health indicators
 -- Version: 2.0.0
 -- Compatible with: WoW 12.0.1+ (The War Within)
--- Rewritten using DBM/BigWigs patterns for robust event handling
+-- Rewritten using BigWigs pattern: All frames created in Lua, XML only loads files
 
 -------------------------------------------------------------------------------
 -- Addon Declaration
@@ -18,6 +18,7 @@ end)
 -- Local State
 -------------------------------------------------------------------------------
 local edgeFrame = nil
+local edgeTextures = {}  -- Store texture references
 local lastWarningTime = 0
 local lowHealthShown = false
 local isDPSSpec = false
@@ -31,6 +32,7 @@ local addonLoaded = false
 local WARNING_COOLDOWN = 3 -- seconds between warnings
 local HEALTH_SHOW_THRESHOLD = 10  -- Show glow at or below this %
 local HEALTH_HIDE_THRESHOLD = 12  -- Hide glow at or above this %
+local EDGE_GRADIENT_SIZE = 120    -- Size of edge gradients in pixels
 
 -- DPS spec role IDs (validated for WoW 12.0.1)
 local DPS_SPECS = {
@@ -74,6 +76,88 @@ local DPS_SPECS = {
     [71] = true, -- Arms
     [72] = true, -- Fury
 }
+
+-------------------------------------------------------------------------------
+-- UI Creation (BigWigs Pattern: Create frames in Lua)
+-------------------------------------------------------------------------------
+
+-- Create the edge glow frame programmatically
+local function CreateEdgeFrame()
+    -- Create main frame
+    edgeFrame = CreateFrame("Frame", "SidekickEdgeFrame", UIParent)
+    edgeFrame:SetFrameStrata("HIGH")
+    edgeFrame:SetFrameLevel(100)
+    edgeFrame:SetSize(1, 1)
+    edgeFrame:SetPoint("CENTER", UIParent, "CENTER")
+    edgeFrame:Hide()
+
+    -- Get screen dimensions
+    local screenWidth = GetScreenWidth()
+    local screenHeight = GetScreenHeight()
+
+    -- Create gradient colors
+    local orangeStart, orangeEnd
+    if CreateColor then
+        -- Modern API (11.0+, 12.0+)
+        orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
+        orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
+    else
+        -- Fallback for potential API changes
+        orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
+        orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
+    end
+
+    -- Create top edge gradient
+    local topEdge = edgeFrame:CreateTexture("SidekickEdgeFrameTopEdge", "BACKGROUND")
+    topEdge:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
+    topEdge:SetPoint("TOP", UIParent, "TOP", 0, 0)
+    topEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
+    edgeTextures.top = topEdge
+
+    -- Create bottom edge gradient
+    local bottomEdge = edgeFrame:CreateTexture("SidekickEdgeFrameBottomEdge", "BACKGROUND")
+    bottomEdge:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
+    bottomEdge:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+    bottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
+    edgeTextures.bottom = bottomEdge
+
+    -- Create left edge gradient
+    local leftEdge = edgeFrame:CreateTexture("SidekickEdgeFrameLeftEdge", "BACKGROUND")
+    leftEdge:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
+    leftEdge:SetPoint("LEFT", UIParent, "LEFT", 0, 0)
+    leftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
+    edgeTextures.left = leftEdge
+
+    -- Create right edge gradient
+    local rightEdge = edgeFrame:CreateTexture("SidekickEdgeFrameRightEdge", "BACKGROUND")
+    rightEdge:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
+    rightEdge:SetPoint("RIGHT", UIParent, "RIGHT", 0, 0)
+    rightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
+    edgeTextures.right = rightEdge
+
+    return edgeFrame
+end
+
+-- Update edge frame size on screen resolution changes
+local function UpdateEdgeFrameSize()
+    if not edgeFrame then return end
+
+    local screenWidth = GetScreenWidth()
+    local screenHeight = GetScreenHeight()
+
+    if edgeTextures.top then
+        edgeTextures.top:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
+    end
+    if edgeTextures.bottom then
+        edgeTextures.bottom:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
+    end
+    if edgeTextures.left then
+        edgeTextures.left:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
+    end
+    if edgeTextures.right then
+        edgeTextures.right:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
+    end
+end
 
 -------------------------------------------------------------------------------
 -- Helper Functions
@@ -250,45 +334,13 @@ function Sidekick:ADDON_LOADED(addonName)
 end
 
 function Sidekick:PLAYER_ENTERING_WORLD()
-    -- Get reference to edge frame
-    edgeFrame = _G["SidekickEdgeFrame"]
-
+    -- Create edge frame if it doesn't exist
     if not edgeFrame then
-        print("|cFFFF0000Sidekick Error: Could not find edge frame|r")
-        return
+        CreateEdgeFrame()
     end
 
-    -- Set up textures to span full screen
-    local screenWidth = GetScreenWidth()
-    local screenHeight = GetScreenHeight()
-
-    local topEdge = _G["SidekickEdgeFrameTopEdge"]
-    local bottomEdge = _G["SidekickEdgeFrameBottomEdge"]
-    local leftEdge = _G["SidekickEdgeFrameLeftEdge"]
-    local rightEdge = _G["SidekickEdgeFrameRightEdge"]
-
-    if topEdge then topEdge:SetWidth(screenWidth) end
-    if bottomEdge then bottomEdge:SetWidth(screenWidth) end
-    if leftEdge then leftEdge:SetHeight(screenHeight) end
-    if rightEdge then rightEdge:SetHeight(screenHeight) end
-
-    -- Set up gradients (WoW 12.0+ compatible with fallback)
-    local orangeStart, orangeEnd
-
-    if CreateColor then
-        -- Modern API (11.0+, 12.0+)
-        orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
-        orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
-    else
-        -- Fallback for potential API changes
-        orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
-        orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
-    end
-
-    if topEdge then topEdge:SetGradient("VERTICAL", orangeStart, orangeEnd) end
-    if bottomEdge then bottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart) end
-    if leftEdge then leftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd) end
-    if rightEdge then rightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart) end
+    -- Update edge frame size for current screen resolution
+    UpdateEdgeFrameSize()
 
     -- Update spec and combat status
     UpdateSpecStatus()
@@ -352,6 +404,16 @@ function Sidekick:COMBAT_LOG_EVENT_UNFILTERED()
             end
         end
     end
+end
+
+-- Handle UI scale changes
+function Sidekick:UI_SCALE_CHANGED()
+    UpdateEdgeFrameSize()
+end
+
+-- Handle display size changes
+function Sidekick:DISPLAY_SIZE_CHANGED()
+    UpdateEdgeFrameSize()
 end
 
 -------------------------------------------------------------------------------
@@ -562,3 +624,5 @@ Sidekick:RegisterEvent("PLAYER_ENTERING_WORLD")
 Sidekick:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 Sidekick:RegisterEvent("PLAYER_REGEN_DISABLED")
 Sidekick:RegisterEvent("PLAYER_REGEN_ENABLED")
+Sidekick:RegisterEvent("UI_SCALE_CHANGED")
+Sidekick:RegisterEvent("DISPLAY_SIZE_CHANGED")
