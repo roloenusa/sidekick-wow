@@ -1,7 +1,14 @@
 -- Resource Bar Customization: Configurable thresholds, colors, and highlights
--- Version: 2.0.0
--- Compatible with: WoW 12.0.1+ (The War Within)
--- Rewritten using ClassResourceBar patterns for robust event handling
+-- Version: 3.0.0
+-- Compatible with: WoW 12.0.x (Midnight) and later
+--
+-- Player secondary resources (Astral Power, Combo Points, Holy Power, Chi,
+-- Runes, Soul Shards, Arcane Charges, Essence) are NOT secret under Midnight,
+-- so the marker/color math below works normally for them. Primary power (mana,
+-- energy, rage, fury) can be a Secret Value in restricted combat; reads of the
+-- current value are therefore guarded with issecretvalue() and value-based
+-- coloring is skipped rather than erroring when the value is secret.
+-- See: https://warcraft.wiki.gg/wiki/Secret_Values
 
 -------------------------------------------------------------------------------
 -- Module Declaration
@@ -34,6 +41,17 @@ local MAX_FIND_ATTEMPTS = 10
 local FEATURE_MARKERS = "markers"
 local FEATURE_COLORS = "colors"
 local FEATURE_HIGHLIGHTS = "highlights"
+
+-------------------------------------------------------------------------------
+-- Secret Value Helper
+-------------------------------------------------------------------------------
+
+-- True if the value is a Midnight "secret value" we may not inspect. Arithmetic
+-- or comparison on such a value is an immediate Lua error, so callers guard with
+-- this before doing math on a power reading.
+local function IsSecret(value)
+    return issecretvalue and issecretvalue(value) or false
+end
 
 -------------------------------------------------------------------------------
 -- Database Helpers
@@ -268,6 +286,13 @@ local function GetActiveThreshold(currentPower)
     return activeThreshold
 end
 
+-- Restore the power bar to its captured default color
+local function RestoreBarColor()
+    if powerBarFrame and powerBarFrame.SetStatusBarColor and originalBarColor.r then
+        powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
+    end
+end
+
 -- Update bar color based on current power
 local function UpdateBarColor(currentPower)
     if not powerBarFrame or not powerBarFrame.SetStatusBarColor then
@@ -275,10 +300,7 @@ local function UpdateBarColor(currentPower)
     end
 
     if not IsFeatureEnabled(FEATURE_COLORS) then
-        -- Restore original color
-        if originalBarColor.r then
-            powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
-        end
+        RestoreBarColor()
         return
     end
 
@@ -374,7 +396,19 @@ local function OnPowerUpdate()
         return
     end
 
-    local currentPower, maxPower = GetPowerInfo()
+    local currentPower = GetPowerInfo()
+
+    -- Primary power can be a Secret Value in restricted combat. We cannot compare
+    -- it against thresholds, so restore the default look and skip value-based
+    -- coloring rather than trigger a Lua error. Secondary resources (the common
+    -- use case) are never secret and fall through to the normal path.
+    if IsSecret(currentPower) then
+        RestoreBarColor()
+        if highlightFrame and highlightFrame.glow then
+            highlightFrame.glow:SetAlpha(0)
+        end
+        return
+    end
 
     UpdateBarColor(currentPower)
     UpdateHighlight(currentPower)

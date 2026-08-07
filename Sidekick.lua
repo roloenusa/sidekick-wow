@@ -1,7 +1,15 @@
 -- Sidekick: Alerts DPS players to target enemies and shows low health indicators
--- Version: 2.0.0
--- Compatible with: WoW 12.0.1+ (The War Within)
--- Rewritten using BigWigs pattern: All frames created in Lua, XML only loads files
+-- Version: 3.0.0
+-- Compatible with: WoW 12.0.x (Midnight) and later
+--
+-- Midnight (Patch 12.0) introduced "Secret Values": in restricted combat the
+-- game hands addons opaque values for a unit's health that cannot be read,
+-- compared, or used in arithmetic. Any such operation is an immediate Lua error.
+-- Sidekick therefore never inspects target health. Instead it feeds the health
+-- percent through a Blizzard curve object that outputs an alpha value, and pipes
+-- that alpha straight into the glow frame. The glow reflects the fight without
+-- the addon ever "knowing" the number. This mirrors the pattern used by Cell.
+-- See: https://warcraft.wiki.gg/wiki/Secret_Values
 
 -------------------------------------------------------------------------------
 -- Addon Declaration
@@ -19,8 +27,8 @@ end)
 -------------------------------------------------------------------------------
 local edgeFrame = nil
 local edgeTextures = {}  -- Store texture references
+local lowHealthCurve = nil  -- CurveObject mapping health percent -> glow alpha
 local lastWarningTime = 0
-local lowHealthShown = false
 local isDPSSpec = false
 local inCombat = false
 local isEnabled = false
@@ -29,12 +37,20 @@ local addonLoaded = false
 -------------------------------------------------------------------------------
 -- Configuration Constants
 -------------------------------------------------------------------------------
-local WARNING_COOLDOWN = 3 -- seconds between warnings
-local HEALTH_SHOW_THRESHOLD = 10  -- Show glow at or below this %
-local HEALTH_HIDE_THRESHOLD = 12  -- Hide glow at or above this %
+local WARNING_COOLDOWN = 3        -- seconds between warnings
 local EDGE_GRADIENT_SIZE = 120    -- Size of edge gradients in pixels
 
--- DPS spec role IDs (validated for WoW 12.0.1)
+-- Health thresholds as FRACTIONS (0.0 - 1.0), matching the curve range used by
+-- Cell's Midnight code. The glow is fully on at or below HEALTH_SHOW_THRESHOLD
+-- and fades out to nothing by HEALTH_HIDE_THRESHOLD.
+--
+-- NOTE: If UnitHealthPercent turns out to feed the curve a 0-100 value instead
+-- of 0-1, the glow will trigger at the wrong point. If that happens in-game,
+-- change these two lines to 10 and 12.
+local HEALTH_SHOW_THRESHOLD = 0.10
+local HEALTH_HIDE_THRESHOLD = 0.12
+
+-- DPS spec IDs. These are stable identifiers and unaffected by Secret Values.
 local DPS_SPECS = {
     -- Druid
     [102] = true, -- Balance
@@ -78,62 +94,82 @@ local DPS_SPECS = {
 }
 
 -------------------------------------------------------------------------------
--- UI Creation (BigWigs Pattern: Create frames in Lua)
+-- Secret Value Helpers
 -------------------------------------------------------------------------------
+
+-- True if the value is a Midnight "secret value" that we may not inspect.
+-- issecretvalue itself is safe to call on any value and returns a plain boolean.
+local function IsSecret(value)
+    return issecretvalue and issecretvalue(value) or false
+end
+
+-- True if the curve-based health display API is available (Midnight 12.0+).
+local function HasHealthCurveAPI()
+    return C_CurveUtil and C_CurveUtil.CreateCurve and UnitHealthPercent and true or false
+end
+
+-------------------------------------------------------------------------------
+-- UI Creation (frames built in Lua, BigWigs style)
+-------------------------------------------------------------------------------
+
+-- Build the curve that maps health percent to glow alpha. Output is 1.0 at or
+-- below the show threshold and ramps to 0.0 by the hide threshold, giving a
+-- smooth fade with no flicker and no need for the addon to read the value.
+local function BuildLowHealthCurve()
+    if not HasHealthCurveAPI() then
+        return nil
+    end
+
+    local curve = C_CurveUtil.CreateCurve()
+    curve:AddPoint(0.0, 1.0)                     -- near death: full glow
+    curve:AddPoint(HEALTH_SHOW_THRESHOLD, 1.0)   -- at threshold: full glow
+    curve:AddPoint(HEALTH_HIDE_THRESHOLD, 0.0)   -- just above: fading out
+    curve:AddPoint(1.0, 0.0)                      -- healthy: no glow
+    return curve
+end
 
 -- Create the edge glow frame programmatically
 local function CreateEdgeFrame()
-    -- Create main frame
     edgeFrame = CreateFrame("Frame", "SidekickEdgeFrame", UIParent)
     edgeFrame:SetFrameStrata("HIGH")
     edgeFrame:SetFrameLevel(100)
     edgeFrame:SetSize(1, 1)
     edgeFrame:SetPoint("CENTER", UIParent, "CENTER")
+    edgeFrame:SetAlpha(0)
     edgeFrame:Hide()
 
-    -- Get screen dimensions
     local screenWidth = GetScreenWidth()
     local screenHeight = GetScreenHeight()
 
-    -- Create gradient colors
-    local orangeStart, orangeEnd
-    if CreateColor then
-        -- Modern API (11.0+, 12.0+)
-        orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
-        orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
-    else
-        -- Fallback for potential API changes
-        orangeStart = {r = 1.0, g = 0.5, b = 0.0, a = 0.7}
-        orangeEnd = {r = 1.0, g = 0.5, b = 0.0, a = 0.0}
-    end
+    -- Gradient colors as ColorMixin objects (correct since Dragonflight 10.0)
+    local orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
+    local orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
 
-    -- Create top edge gradient
     local topEdge = edgeFrame:CreateTexture("SidekickEdgeFrameTopEdge", "BACKGROUND")
     topEdge:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
     topEdge:SetPoint("TOP", UIParent, "TOP", 0, 0)
     topEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
     edgeTextures.top = topEdge
 
-    -- Create bottom edge gradient
     local bottomEdge = edgeFrame:CreateTexture("SidekickEdgeFrameBottomEdge", "BACKGROUND")
     bottomEdge:SetSize(screenWidth, EDGE_GRADIENT_SIZE)
     bottomEdge:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
     bottomEdge:SetGradient("VERTICAL", orangeEnd, orangeStart)
     edgeTextures.bottom = bottomEdge
 
-    -- Create left edge gradient
     local leftEdge = edgeFrame:CreateTexture("SidekickEdgeFrameLeftEdge", "BACKGROUND")
     leftEdge:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
     leftEdge:SetPoint("LEFT", UIParent, "LEFT", 0, 0)
     leftEdge:SetGradient("HORIZONTAL", orangeStart, orangeEnd)
     edgeTextures.left = leftEdge
 
-    -- Create right edge gradient
     local rightEdge = edgeFrame:CreateTexture("SidekickEdgeFrameRightEdge", "BACKGROUND")
     rightEdge:SetSize(EDGE_GRADIENT_SIZE, screenHeight)
     rightEdge:SetPoint("RIGHT", UIParent, "RIGHT", 0, 0)
     rightEdge:SetGradient("HORIZONTAL", orangeEnd, orangeStart)
     edgeTextures.right = rightEdge
+
+    lowHealthCurve = BuildLowHealthCurve()
 
     return edgeFrame
 end
@@ -175,29 +211,6 @@ local function UpdateSpecStatus()
     isDPSSpec = DPS_SPECS[specID] or false
 end
 
--- Check if target is a valid enemy
-local function IsValidEnemy()
-    return UnitExists("target")
-        and UnitCanAttack("player", "target")
-        and not UnitIsDead("target")
-end
-
--- Get target health percentage
-local function GetTargetHealthPercent()
-    if not UnitExists("target") then
-        return 100
-    end
-
-    local health = UnitHealth("target")
-    local maxHealth = UnitHealthMax("target")
-
-    if not health or not maxHealth or maxHealth == 0 then
-        return 100
-    end
-
-    return (health / maxHealth) * 100
-end
-
 -- Show warning message and play sound (with cooldown)
 local function ShowTargetWarning()
     local currentTime = GetTime()
@@ -207,72 +220,71 @@ local function ShowTargetWarning()
 
     lastWarningTime = currentTime
 
-    -- Display warning message
     UIErrorsFrame:AddMessage("Target an enemy unit!", 1.0, 0.2, 0.2, 1.0, 5)
-
-    -- Play error sound
     PlaySound(SOUNDKIT.IG_QUEST_LOG_ABANDON_QUEST)
 end
 
--- Show low health edge glow
-local function ShowLowHealthGlow()
-    if lowHealthShown or not edgeFrame then
+-- Hide the low health edge glow
+local function HideGlow()
+    if edgeFrame then
+        edgeFrame:Hide()
+    end
+end
+
+-- Update the glow. The addon only branches on facts it is allowed to know
+-- (combat state, spec, target existence, and attackability when readable).
+-- The actual low-health decision is delegated entirely to the curve, so a
+-- secret health value is never inspected.
+local function UpdateGlow()
+    if not edgeFrame then return end
+
+    -- If the curve API is missing (pre-Midnight client), disable the glow
+    -- rather than fall back to the old, now-illegal, health arithmetic.
+    if not (lowHealthCurve and UnitHealthPercent) then
+        HideGlow()
         return
     end
 
+    if not (inCombat and isEnabled and isDPSSpec) then
+        HideGlow()
+        return
+    end
+
+    -- In combat with nothing targeted: remind the player to grab an enemy.
+    if not UnitExists("target") then
+        HideGlow()
+        ShowTargetWarning()
+        return
+    end
+
+    -- If we can read attackability (not secret) and the target is friendly,
+    -- there is nothing to glow about; nudge the player instead.
+    local canAttack = UnitCanAttack("player", "target")
+    if not IsSecret(canAttack) and not canAttack then
+        HideGlow()
+        ShowTargetWarning()
+        return
+    end
+
+    -- A dead target should never glow. UnitIsDead may be secret in restricted
+    -- content; only act on it when we can actually read it.
+    local isDead = UnitIsDead("target")
+    if not IsSecret(isDead) and isDead then
+        HideGlow()
+        ShowTargetWarning()
+        return
+    end
+
+    -- Drive the glow alpha from the (possibly secret) health percent via the
+    -- curve. SetAlpha accepts secret values; we never see the number ourselves.
     edgeFrame:Show()
-    lowHealthShown = true
-end
-
--- Hide low health edge glow
-local function HideLowHealthGlow()
-    if not lowHealthShown or not edgeFrame then
-        return
-    end
-
-    edgeFrame:Hide()
-    lowHealthShown = false
-end
-
--- Check current state and update UI
-local function CheckTargetState()
-    -- Only trigger alerts when in combat and enabled
-    if not inCombat or not isEnabled or not isDPSSpec then
-        HideLowHealthGlow()
-        return
-    end
-
-    -- Check for valid enemy target
-    if not IsValidEnemy() then
-        HideLowHealthGlow()
-        -- Warn if targeting non-enemy while in combat
-        if UnitExists("target") and not UnitIsDead("target") then
-            ShowTargetWarning()
-        end
-        return
-    end
-
-    -- Check target health with hysteresis to prevent flickering
-    local healthPercent = GetTargetHealthPercent()
-
-    if lowHealthShown then
-        -- Already showing - only hide if health rises above hide threshold
-        if healthPercent >= HEALTH_HIDE_THRESHOLD then
-            HideLowHealthGlow()
-        end
-    else
-        -- Not showing - only show if health drops to or below show threshold
-        if healthPercent <= HEALTH_SHOW_THRESHOLD then
-            ShowLowHealthGlow()
-        end
-    end
+    edgeFrame:SetAlpha(UnitHealthPercent("target", false, lowHealthCurve))
 end
 
 -------------------------------------------------------------------------------
--- Event Registration Management (DBM-style)
+-- Event Registration Management (register combat events only during combat)
 -------------------------------------------------------------------------------
 
--- Register combat-specific events (only during combat)
 local function RegisterCombatEvents()
     if not isEnabled or not isDPSSpec then
         return
@@ -280,17 +292,15 @@ local function RegisterCombatEvents()
 
     Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
     Sidekick:RegisterUnitEvent("UNIT_HEALTH", "target")
-    Sidekick:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    Sidekick:RegisterEvent("UNIT_DIED")
 end
 
--- Unregister combat-specific events
 local function UnregisterCombatEvents()
     Sidekick:UnregisterEvent("PLAYER_TARGET_CHANGED")
     Sidekick:UnregisterEvent("UNIT_HEALTH")
-    Sidekick:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    Sidekick:UnregisterEvent("UNIT_DIED")
 end
 
--- Update event registration based on state
 local function UpdateEventRegistration()
     if not addonLoaded then
         return
@@ -312,14 +322,12 @@ function Sidekick:ADDON_LOADED(addonName)
         return
     end
 
-    -- Initialize saved variables
     if not SidekickDB then
         SidekickDB = {
             enabled = true
         }
     end
 
-    -- Ensure enabled is a boolean
     if type(SidekickDB.enabled) ~= "boolean" then
         SidekickDB.enabled = true
     end
@@ -329,20 +337,16 @@ function Sidekick:ADDON_LOADED(addonName)
 
     print("|cFF00FF00Sidekick loaded!|r Type /sidekick for options.")
 
-    -- No need to listen for ADDON_LOADED anymore
     self:UnregisterEvent("ADDON_LOADED")
 end
 
 function Sidekick:PLAYER_ENTERING_WORLD()
-    -- Create edge frame if it doesn't exist
     if not edgeFrame then
         CreateEdgeFrame()
     end
 
-    -- Update edge frame size for current screen resolution
     UpdateEdgeFrameSize()
 
-    -- Update spec and combat status
     UpdateSpecStatus()
     inCombat = UnitAffectingCombat("player") or false
     UpdateEventRegistration()
@@ -352,9 +356,8 @@ function Sidekick:PLAYER_SPECIALIZATION_CHANGED()
     UpdateSpecStatus()
     UpdateEventRegistration()
 
-    -- If we're no longer a DPS spec, clean up
     if not isDPSSpec then
-        HideLowHealthGlow()
+        HideGlow()
     end
 end
 
@@ -362,56 +365,57 @@ function Sidekick:PLAYER_REGEN_DISABLED()
     -- Entered combat
     inCombat = true
     UpdateEventRegistration()
-    CheckTargetState()
+    UpdateGlow()
 end
 
 function Sidekick:PLAYER_REGEN_ENABLED()
     -- Left combat
     inCombat = false
     UpdateEventRegistration()
-    HideLowHealthGlow()
+    HideGlow()
 end
 
 function Sidekick:PLAYER_TARGET_CHANGED()
     if not isEnabled then
         return
     end
-    CheckTargetState()
+    UpdateGlow()
 end
 
 function Sidekick:UNIT_HEALTH(unit)
     if unit ~= "target" or not isEnabled then
         return
     end
-    CheckTargetState()
+    UpdateGlow()
 end
 
-function Sidekick:COMBAT_LOG_EVENT_UNFILTERED()
+-- UNIT_DIED replaces the old COMBAT_LOG_EVENT_UNFILTERED path, which now errors
+-- when registered under Midnight. The payload is the GUID of the unit that died.
+function Sidekick:UNIT_DIED(unitGUID)
     if not isEnabled then
         return
     end
 
-    local _, subevent, _, _, _, _, _, destGUID = CombatLogGetCurrentEventInfo()
+    local targetGUID = UnitGUID("target")
 
-    -- Check for target death
-    if subevent == "UNIT_DIED" then
-        local targetGUID = UnitGUID("target")
-        if targetGUID and destGUID == targetGUID then
-            HideLowHealthGlow()
-            -- If still in combat, warn to select new target
-            if inCombat and isDPSSpec then
-                ShowTargetWarning()
-            end
+    -- GUIDs can be secret in restricted content; do not compare them if so.
+    -- UNIT_HEALTH / PLAYER_TARGET_CHANGED will still correct the glow.
+    if IsSecret(unitGUID) or IsSecret(targetGUID) then
+        return
+    end
+
+    if targetGUID and unitGUID == targetGUID then
+        HideGlow()
+        if inCombat and isDPSSpec then
+            ShowTargetWarning()
         end
     end
 end
 
--- Handle UI scale changes
 function Sidekick:UI_SCALE_CHANGED()
     UpdateEdgeFrameSize()
 end
 
--- Handle display size changes
 function Sidekick:DISPLAY_SIZE_CHANGED()
     UpdateEdgeFrameSize()
 end
@@ -463,7 +467,7 @@ SlashCmdList["SIDEKICK"] = function(msg)
             print("|cFF00FF00Sidekick: Enabled|r")
         else
             print("|cFFFF0000Sidekick: Disabled|r")
-            HideLowHealthGlow()
+            HideGlow()
         end
         UpdateEventRegistration()
 

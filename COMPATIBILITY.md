@@ -1,141 +1,75 @@
-# Sidekick Addon - WoW 12.0.1 Compatibility
+# Sidekick Addon - WoW Compatibility
 
 ## Version Information
-- **Addon Version**: 1.1.0
-- **WoW Interface**: 120001 (12.0.1 - The War Within)
-- **Minimum Interface**: 120001
-- **Tested On**: WoW 12.0.1+
+- Addon Version: 3.0.0
+- WoW Interface: 120100, 120007 (Midnight, Patch 12.0.7 live and 12.1.0)
+- Tested On: WoW 12.0.x (Midnight)
 
-## Compatibility Status: ✅ FULLY COMPATIBLE
+## Status
 
-All APIs used by this addon are confirmed compatible with WoW 12.0.1 (The War Within).
+Sidekick 3.0.0 is a rewrite for Midnight (Patch 12.0). The previous version
+(2.0.0, interface 120001) does not work on current retail: it crashes on combat
+entry and cannot compute target health. See the "What broke" section below.
 
-## API Compliance Summary
+## What broke in Midnight (Patch 12.0)
 
-### Core Functions
-- All frame and UI functions verified ✅
-- All unit functions verified ✅
-- All event registrations verified ✅
-- Power type APIs verified ✅
-- Combat log APIs verified ✅
+Patch 12.0 introduced two changes that the old code could not survive.
 
-### Known API Changes Handled
+### 1. COMBAT_LOG_EVENT_UNFILTERED now errors on registration
 
-#### 1. Gradient System (11.0+)
-**Status**: ✅ Implemented correctly
+Registering this event throws a Lua error. The old addon registered it on combat
+entry, so the entire combat path failed. Death detection has been moved to the
+new `UNIT_DIED` frame event, which carries the GUID of the unit that died.
 
-The addon uses the modern ColorMixin API with `CreateColor()`:
-```lua
-orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
-SidekickEdgeFrame:SetGradient("VERTICAL", orangeStart, orangeEnd)
-```
+### 2. Unit health is now a "Secret Value" in combat
 
-This is the correct modern approach for 12.0.1 and includes fallback for older versions.
+In restricted combat the game returns opaque values for a unit's health.
+Arithmetic and comparison on these values are immediate Lua errors, so the old
+`(health / maxHealth) * 100` followed by `<= 10` no longer works. Blizzard still
+allows addons to *display* state driven by secret values, just not to *read*
+them.
 
-#### 2. PlayerFrame Structure (11.0+)
-**Status**: ✅ Multiple fallbacks implemented
+## How Sidekick 3.0.0 handles it
 
-ResourceBar.lua includes 4 fallback methods to find the power bar:
-1. AlternatePowerBar (for specs like Balance Druid)
-2. Modern PlayerFrameContent structure
-3. Direct manabar reference
-4. Dynamic frame scanning
+### Low-health glow (secret-safe)
 
-This ensures compatibility across different UI configurations.
+The glow no longer reads target health. It builds a curve with
+`C_CurveUtil.CreateCurve()` that outputs full alpha at or below the low-health
+threshold and 0 above it, then feeds the target's health percent through the
+curve via `UnitHealthPercent("target", false, curve)`. The returned alpha is
+piped straight into the glow frame with `SetAlpha`. The glow reflects the fight
+without the addon ever knowing the health value. This mirrors the pattern used
+by the Cell addon's Midnight migration.
 
-#### 3. Power Type Detection
-**Status**: ✅ Enum API with numeric fallback
+### Target and death detection
 
-Correctly uses both modern Enum.PowerType and legacy numeric power types:
-```lua
-if Enum and Enum.PowerType and Enum.PowerType.AstralPower then
-    currentPower = UnitPower("player", Enum.PowerType.AstralPower)
-elseif UnitPower("player", 8) > 0 then
-    currentPower = UnitPower("player", 8)  -- Legacy fallback
-end
-```
+- Combat entry/exit, spec, and target existence are still readable and used to
+  gate the glow.
+- `UnitCanAttack` and `UnitIsDead` are checked only when they are not secret
+  (guarded with `issecretvalue`); in restricted content where they are secret,
+  the glow relies on the health curve alone.
+- Death detection uses `UNIT_DIED`, comparing the event GUID to the target GUID,
+  guarded with `issecretvalue` so it never compares secret GUIDs.
 
-## Events Used
+### Resource bar
 
-All events are standard and stable in 12.0.1:
+Player secondary resources (Astral Power, Combo Points, Holy Power, Chi, Runes,
+Soul Shards, Arcane Charges, Essence) are not secret, so threshold markers and
+colors work normally for them. Primary power (mana, energy, rage, fury) can be
+secret in restricted combat; the current-power read is guarded with
+`issecretvalue`, and value-based coloring is skipped rather than erroring when
+the value is secret. Recoloring the Blizzard power bar is a display operation and
+remains allowed; the addon never feeds a secret value into `SetStatusBarColor`.
 
-### Combat & Targeting
-- `PLAYER_TARGET_CHANGED` - Target switching detection
-- `UNIT_HEALTH` - Target health monitoring
-- `COMBAT_LOG_EVENT_UNFILTERED` - Death detection
-- `PLAYER_REGEN_DISABLED` - Combat start
-- `PLAYER_REGEN_ENABLED` - Combat end
+## Known limitation to verify in-game
 
-### Power & Specialization
-- `UNIT_POWER_UPDATE` - Resource changes
-- `UNIT_MAXPOWER` - Max resource changes
-- `PLAYER_SPECIALIZATION_CHANGED` - Spec switching
+The curve range for `UnitHealthPercent` is assumed to be a 0-1 fraction (matching
+Cell's real Midnight code). If the glow triggers at the wrong health level,
+change `HEALTH_SHOW_THRESHOLD` and `HEALTH_HIDE_THRESHOLD` in `Sidekick.lua` from
+`0.10` / `0.12` to `10` / `12`.
 
-### Initialization
-- `ADDON_LOADED` - Addon initialization
-- `PLAYER_ENTERING_WORLD` - UI setup
+## References
 
-## DPS Spec Detection
-
-Addon includes complete DPS spec coverage for all classes in 12.0.1:
-- All Hunter, Mage, Rogue, and Warlock specs (pure DPS)
-- DPS specs for hybrid classes (Druid, DK, DH, Evoker, Monk, Paladin, Priest, Shaman, Warrior)
-- Spec IDs verified against 12.0.1 data
-
-## Defensive Programming Features
-
-✅ Multiple API fallbacks for forward compatibility
-✅ Nil-checking for all frame references
-✅ Event unregistration when not needed (performance)
-✅ Hysteresis thresholds to prevent UI flickering
-✅ Cooldown system for warning messages
-
-## Performance Optimizations
-
-- Uses `RegisterUnitEvent()` for target-specific events (reduces event spam)
-- Dynamically registers/unregisters events based on combat state
-- Caches DPS spec and combat status to avoid repeated API calls
-- Event throttling with cooldown timers
-
-## Testing Recommendations
-
-### Before Installing
-1. Backup your WTF folder (saved variables)
-2. Verify interface version matches (120001)
-
-### After Installing
-1. Test with different specializations
-2. Verify power bar detection on your class
-3. Test in combat with various targets
-4. Verify slash commands work (`/sidekick` or `/sk`)
-
-### Troubleshooting
-If resource bar features don't work:
-- Ensure you're using a class with an alternate power type
-- Try `/sk rb status` to check configuration
-- Reload UI (`/reload`) after spec changes
-
-## Future-Proofing
-
-The addon is built with future API changes in mind:
-- All modern APIs include fallbacks
-- Frame detection uses multiple methods
-- Power type detection supports both Enum and numeric types
-- Gradient system ready for potential API evolution
-
-## File Verification
-
-Run this grep to verify no old TargetHelper references remain:
-```bash
-grep -ri "targethelper" *.lua *.xml *.toc
-```
-
-Expected result: No matches (all renamed to Sidekick)
-
----
-
-**Last Updated**: 2026-04-17
-**Verified Against**: WoW 12.0.1 API Documentation
-**Compatibility Score**: 100/100
-
-For detailed API verification, see `API_VERIFICATION.md`
+- Secret Values: https://warcraft.wiki.gg/wiki/Secret_Values
+- Patch 12.0.0 API changes: https://warcraft.wiki.gg/wiki/Patch_12.0.0/API_changes
+- Cell Midnight migration: https://github.com/enderneko/Cell/pull/457

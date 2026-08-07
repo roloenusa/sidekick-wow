@@ -1,189 +1,58 @@
-# WoW 12.0.1 API Verification for Sidekick Addon
+# WoW Midnight (Patch 12.0.x) API Verification for Sidekick
+
+This document tracks the APIs Sidekick uses and their status under Midnight
+(Patch 12.0). The previous verification (which claimed 100/100 compatibility with
+"12.0.1 / The War Within") was wrong: The War Within is Patch 11.x, and the two
+core mechanisms of the old addon are broken on retail 12.0. See COMPATIBILITY.md.
 
 ## Interface Version
-- **TOC Interface**: 120001 ✅ (Correct for WoW 12.0.1)
-- **Min Interface**: 120001 ✅
-- **Compatible With**: 120001 ✅
+- TOC Interface: `120100, 120007` (12.1.0 and current live 12.0.7)
 
-## API Functions Used
+## Removed / broken APIs the old addon relied on
 
-### Frame & UI Functions (Sidekick.lua)
-| Function | Status | Notes |
-|----------|--------|-------|
-| `CreateFrame()` | ✅ | Core API, stable |
-| `Frame:RegisterEvent()` | ✅ | Core API, stable |
-| `Frame:UnregisterEvent()` | ✅ | Core API, stable |
-| `Frame:RegisterUnitEvent()` | ✅ | Added in 7.0, stable |
-| `Frame:SetScript()` | ✅ | Core API, stable |
-| `Frame:Show()` | ✅ | Core API, stable |
-| `Frame:Hide()` | ✅ | Core API, stable |
-| `Texture:SetWidth()` | ✅ | Core API, stable |
-| `Texture:SetHeight()` | ✅ | Core API, stable |
-| `Texture:SetGradient()` | ⚠️ | **DEPRECATED in 11.0** - See Issue #1 |
+| API / Event | Status in 12.0 | Replacement |
+|-------------|----------------|-------------|
+| `COMBAT_LOG_EVENT_UNFILTERED` | Errors on `RegisterEvent` | `UNIT_DIED` frame event |
+| `CombatLogGetCurrentEventInfo()` | No longer usable for this path | `UNIT_DIED` payload (GUID) |
+| `UnitHealth` / `UnitHealthMax` arithmetic in combat | Secret Value; arithmetic/compare errors | `UnitHealthPercent` + curve |
 
-### Unit Functions (Sidekick.lua)
-| Function | Status | Notes |
-|----------|--------|-------|
-| `GetSpecialization()` | ✅ | Added in 5.0, stable |
-| `GetSpecializationInfo()` | ✅ | Added in 5.0, stable |
-| `UnitExists()` | ✅ | Core API, stable |
-| `UnitCanAttack()` | ✅ | Core API, stable |
-| `UnitIsDead()` | ✅ | Core API, stable |
-| `UnitHealth()` | ✅ | Core API, stable |
-| `UnitHealthMax()` | ✅ | Core API, stable |
-| `UnitAffectingCombat()` | ✅ | Core API, stable |
-| `UnitGUID()` | ✅ | Core API, stable |
+## Secret-safe APIs now used
 
-### Power Functions (ResourceBar.lua)
-| Function | Status | Notes |
-|----------|--------|-------|
-| `UnitPowerType()` | ✅ | Core API, stable |
-| `UnitPower()` | ✅ | Core API, stable |
-| `UnitPowerMax()` | ✅ | Core API, stable |
-| `Enum.PowerType.AstralPower` | ✅ | Added in 8.0, stable (value = 8) |
+| API | Purpose | Source |
+|-----|---------|--------|
+| `issecretvalue(value)` | Detect secret values before math/compare | warcraft.wiki.gg/wiki/API_issecretvalue |
+| `C_CurveUtil.CreateCurve()` | Build percent-to-alpha curve | warcraft.wiki.gg/wiki/API_C_CurveUtil.CreateCurve |
+| `curve:AddPoint(input, output)` | Define curve points | Cell PR #457 (real usage) |
+| `UnitHealthPercent(unit, usePredicted, curve)` | Health percent through curve, returns alpha | warcraft.wiki.gg/wiki/API_UnitHealthPercent |
+| `Frame:SetAlpha(value)` | Accepts secret alpha to drive glow | warcraft.wiki.gg/wiki/Secret_Values |
+| `UNIT_DIED` | Death detection (payload: unit GUID) | warcraft.wiki.gg/wiki/UNIT_DIED |
 
-### UI & Utility Functions
-| Function | Status | Notes |
-|----------|--------|-------|
-| `GetTime()` | ✅ | Core API, stable |
-| `GetScreenWidth()` | ✅ | Core API, stable |
-| `GetScreenHeight()` | ✅ | Core API, stable |
-| `CreateColor()` | ✅ | Added in 9.0, stable |
-| `PlaySound()` | ✅ | Core API, stable |
-| `SOUNDKIT.IG_QUEST_LOG_ABANDON_QUEST` | ✅ | Standard sound constant |
-| `UIErrorsFrame:AddMessage()` | ✅ | Core API, stable |
-| `C_Timer.After()` | ✅ | Added in 7.0, stable |
+## APIs confirmed still stable
 
-### Combat Log Functions
-| Function | Status | Notes |
-|----------|--------|-------|
-| `CombatLogGetCurrentEventInfo()` | ✅ | Added in 8.0, stable |
+- `CreateFrame`, `RegisterEvent`, `RegisterUnitEvent`, `SetScript`, `Show`, `Hide`
+- `GetSpecialization`, `GetSpecializationInfo` (global forms still exist)
+- `UnitExists`, `UnitGUID`, `UnitAffectingCombat`
+- `UnitPower`, `UnitPowerMax`, `UnitPowerType` (secondary resources not secret;
+  primary power guarded with `issecretvalue`)
+- `SetGradient(orientation, ColorMixin, ColorMixin)` with `CreateColor` objects
+- `GetScreenWidth`, `GetScreenHeight`, `GetTime`, `PlaySound`, `C_Timer.After`
+- `StatusBar:SetStatusBarColor` / `GetStatusBarColor` (display only; never fed a
+  secret value by this addon)
 
-### Frame Methods (ResourceBar.lua)
-| Function | Status | Notes |
-|----------|--------|-------|
-| `Frame:GetChildren()` | ✅ | Core API, stable |
-| `Frame:GetHeight()` | ✅ | Core API, stable |
-| `Frame:GetWidth()` | ✅ | Core API, stable |
-| `Frame:SetAllPoints()` | ✅ | Core API, stable |
-| `Frame:SetFrameStrata()` | ✅ | Core API, stable |
-| `Frame:CreateTexture()` | ✅ | Core API, stable |
-| `StatusBar:GetValue()` | ✅ | Core API, stable |
-| `StatusBar:GetStatusBarColor()` | ✅ | Core API, stable |
-| `StatusBar:SetStatusBarColor()` | ✅ | Core API, stable |
-| `StatusBar:GetStatusBarTexture()` | ✅ | Core API, stable |
-| `Texture:SetColorTexture()` | ✅ | Added in 7.0, stable |
-| `Texture:SetBlendMode()` | ✅ | Core API, stable |
-| `Texture:SetAlpha()` | ✅ | Core API, stable |
-| `Texture:SetVertexColor()` | ✅ | Core API, stable |
-| `Texture:SetTexture()` | ✅ | Core API, stable |
+## Items to verify in-game (could not be confirmed without the client)
 
-## Events Used
+1. Whether `UnitHealthPercent` feeds the curve a 0-1 fraction (assumed) or a
+   0-100 value. If the glow triggers at the wrong point, flip the two threshold
+   constants in `Sidekick.lua`.
+2. Whether `UnitExists` / `UnitCanAttack` / `UnitIsDead` return secret values in
+   restricted content. The code guards `UnitCanAttack` and `UnitIsDead` with
+   `issecretvalue`; if `UnitExists` also becomes secret, add the same guard.
+3. Exact secret behavior of player primary power. The resource bar guards for it,
+   but the exact restriction may vary by patch as Blizzard relaxes limits.
 
-### Sidekick.lua Events
-| Event | Status | Notes |
-|-------|--------|-------|
-| `ADDON_LOADED` | ✅ | Core event, stable |
-| `PLAYER_ENTERING_WORLD` | ✅ | Core event, stable |
-| `PLAYER_SPECIALIZATION_CHANGED` | ✅ | Added in 5.0, stable |
-| `PLAYER_REGEN_DISABLED` | ✅ | Core event, stable |
-| `PLAYER_REGEN_ENABLED` | ✅ | Core event, stable |
-| `PLAYER_TARGET_CHANGED` | ✅ | Core event, stable |
-| `UNIT_HEALTH` | ✅ | Core event, stable |
-| `COMBAT_LOG_EVENT_UNFILTERED` | ✅ | Core event, stable |
+## Sources
 
-### ResourceBar.lua Events
-| Event | Status | Notes |
-|-------|--------|-------|
-| `PLAYER_ENTERING_WORLD` | ✅ | Core event, stable |
-| `UNIT_POWER_UPDATE` | ✅ | Core event, stable |
-| `UNIT_MAXPOWER` | ✅ | Core event, stable |
-| `PLAYER_SPECIALIZATION_CHANGED` | ✅ | Added in 5.0, stable |
-
-## Issues Found
-
-### Issue #1: SetGradient() API Evolution (LOW PRIORITY)
-**Location**: Sidekick.lua:236-239
-
-**Status**: ✅ **Currently Working** - The code uses ColorMixin objects from CreateColor() which is the correct modern approach.
-
-**Current Code**:
-```lua
--- Creates proper ColorMixin objects
-orangeStart = CreateColor(1.0, 0.5, 0.0, 0.7)
-orangeEnd = CreateColor(1.0, 0.5, 0.0, 0.0)
-
--- Uses them with SetGradient (correct for 12.0.1)
-SidekickEdgeFrameTopEdge:SetGradient("VERTICAL", orangeStart, orangeEnd)
-```
-
-**Analysis**:
-- The code correctly uses `CreateColor()` to create ColorMixin objects (introduced in 9.0)
-- `SetGradient(orientation, ColorMixin, ColorMixin)` is the correct modern API for 12.0.1
-- Has fallback to table format for potential future API changes
-- This is the recommended approach and should continue working
-
-**Alternative (if needed in future)**:
-```lua
--- If SetGradient is ever fully removed, use SetGradientAlpha:
-texture:SetGradientAlpha("VERTICAL", 1.0, 0.5, 0.0, 0.7, 1.0, 0.5, 0.0, 0.0)
-```
-
-**Impact**: No immediate action required. Current implementation is correct for 12.0.1.
-
----
-
-## PlayerFrame Structure Changes (INFORMATIONAL)
-
-### Issue #2: PlayerFrame API Changes in 11.0+
-**Location**: ResourceBar.lua:63-101
-
-**Current Implementation**: The code uses multiple fallback methods to find the power bar, which is good practice.
-
-**PlayerFrame Changes in 11.0+**:
-- `PlayerFrame.manabar` → `PlayerFrame.PlayerFrameContent.PlayerFrameContentMain.ManaBar`
-- Many direct frame references moved to nested structures
-
-**Status**: ✅ Code already handles this with multiple fallback methods (Methods 1-4)
-
-**Recommendation**: The current implementation is robust and should continue working.
-
----
-
-## Summary
-
-### ✅ Fully Compatible (No Action Required)
-- All events are valid for 12.0.1
-- All core API functions work correctly
-- Unit functions are stable
-- Combat log API is current
-- Power type enumeration is correct
-
-### ⚠️ Optional Future-Proofing
-1. **SetGradient()** - Currently using correct modern API (ColorMixin objects). If Blizzard ever deprecates this completely, can migrate to SetGradientAlpha().
-
-### 📊 Overall Compatibility Score
-**100/100** - Fully compatible with WoW 12.0.1 API
-
-## Testing Recommendations
-
-1. **Test on PTR/Beta**: When 12.0.2+ is available on PTR, verify SetGradient still works
-2. **Monitor Deprecation Warnings**: Enable Lua error display to catch any new deprecations
-3. **Frame Detection**: Test ResourceBar on different specs to ensure power bar detection works
-4. **Events**: Verify all events fire correctly in 12.0.1+ content
-
-## Additional Notes
-
-- The addon uses defensive programming with fallbacks (good practice)
-- Power type detection handles both modern Enum API and legacy numeric types
-- Frame detection has 4 fallback methods for maximum compatibility
-- All saved variables use proper namespacing (SidekickDB)
-- No restricted API usage detected
-- No secure frame conflicts detected
-
----
-
-**Verified By**: Claude Code API Verification
-**Date**: 2026-04-17
-**Game Version**: 12.0.1 (The War Within)
-**Addon Version**: 1.1.0
+- Secret Values: https://warcraft.wiki.gg/wiki/Secret_Values
+- Patch 12.0.0 API changes: https://warcraft.wiki.gg/wiki/Patch_12.0.0/API_changes
+- Cell Midnight migration (real reference code): https://github.com/enderneko/Cell/pull/457
+- Icy-Veins on Midnight addon limits: https://www.icy-veins.com/wow/news/blizzard-relaxing-more-addon-limitations-in-midnight/
