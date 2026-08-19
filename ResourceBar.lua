@@ -46,11 +46,16 @@ local FEATURE_HIGHLIGHTS = "highlights"
 -- Secret Value Helper
 -------------------------------------------------------------------------------
 
+-- issecretvalue may not exist on pre-12.0 clients; alias it to a no-op so the
+-- same file loads everywhere. Prefer this guard over pcall, which carries
+-- roughly 10x the overhead of a native check.
+local issecretvalue = issecretvalue or function() return false end
+
 -- True if the value is a Midnight "secret value" we may not inspect. Arithmetic
 -- or comparison on such a value is an immediate Lua error, so callers guard with
 -- this before doing math on a power reading.
 local function IsSecret(value)
-    return issecretvalue and issecretvalue(value) or false
+    return issecretvalue(value)
 end
 
 -------------------------------------------------------------------------------
@@ -129,15 +134,19 @@ local function GetPowerInfo()
         if Enum and Enum.PowerType and Enum.PowerType.AstralPower then
             currentPower = UnitPower("player", Enum.PowerType.AstralPower) or 0
             maxPower = UnitPowerMax("player", Enum.PowerType.AstralPower) or 100
-        -- Method 2: Try numeric power type 8 (Astral Power)
-        elseif UnitPowerMax("player", 8) > 0 then
-            currentPower = UnitPower("player", 8) or 0
-            maxPower = UnitPowerMax("player", 8) or 100
+        else
+            -- Method 2: Try numeric power type 8 (Astral Power). Guard the max
+            -- against a secret value before comparing it to zero.
+            local astralMax = UnitPowerMax("player", 8)
+            if not IsSecret(astralMax) and astralMax > 0 then
+                currentPower = UnitPower("player", 8) or 0
+                maxPower = astralMax
+            end
         end
     end
 
-    -- Ensure valid values
-    if maxPower == 0 then
+    -- Ensure valid values. Max power is rarely secret, but guard before comparing.
+    if not IsSecret(maxPower) and maxPower == 0 then
         maxPower = 100
     end
 
@@ -174,19 +183,24 @@ local function FindPowerBarFrame()
         return PlayerFrame.manabar
     end
 
-    -- Method 4: Scan PlayerFrame children for StatusBar with power/mana
+    -- Method 4: Scan PlayerFrame children for a StatusBar whose value matches the
+    -- player's current power. Player power can be a Secret Value in restricted
+    -- combat, and comparing a secret raises an immediate Lua error, so bail out of
+    -- the value match when either side is secret and rely on the frame paths above.
     local powerType = UnitPowerType("player")
     if powerType then
-        local currentPower = UnitPower("player", powerType) or 0
+        local currentPower = UnitPower("player", powerType)
+        if currentPower ~= nil and not IsSecret(currentPower) then
+            local children = {PlayerFrame:GetChildren()}
+            for _, region in pairs(children) do
+                if region and region.GetStatusBarTexture and region.GetValue then
+                    local barValue = region:GetValue()
 
-        local children = {PlayerFrame:GetChildren()}
-        for _, region in pairs(children) do
-            if region and region.GetStatusBarTexture and region.GetValue then
-                local barValue = region:GetValue() or 0
-
-                -- If bar value matches current power, we found it
-                if math.abs(barValue - currentPower) < 0.1 then
-                    return region
+                    -- If bar value matches current power, we found it
+                    if barValue ~= nil and not IsSecret(barValue)
+                        and math.abs(barValue - currentPower) < 0.1 then
+                        return region
+                    end
                 end
             end
         end
@@ -238,7 +252,7 @@ local function UpdateMarkers()
     end
 
     local _, maxPower = GetPowerInfo()
-    if not powerBarFrame or maxPower == 0 then
+    if not powerBarFrame or IsSecret(maxPower) or maxPower == 0 then
         return
     end
 
@@ -597,8 +611,8 @@ function ResourceBar:SetEnabled(enabled)
     isEnabled = enabled
 
     if enabled then
-        self:RegisterEvent("UNIT_POWER_UPDATE")
-        self:RegisterEvent("UNIT_MAXPOWER")
+        self:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
+        self:RegisterUnitEvent("UNIT_MAXPOWER", "player")
         Initialize()
     else
         self:UnregisterEvent("UNIT_POWER_UPDATE")
@@ -636,21 +650,30 @@ end
 -- Initialize Module
 -------------------------------------------------------------------------------
 
--- Wait for addon to be fully loaded before initializing
-C_Timer.After(0.1, function()
+-- Set up saved variables and core events once the addon's data is available,
+-- rather than guessing with an arbitrary timer.
+function ResourceBar:ADDON_LOADED(addonName)
+    if addonName ~= "Sidekick" then
+        return
+    end
+
     EnsureDatabase()
     moduleLoaded = true
 
     -- Register core events
-    ResourceBar:RegisterEvent("PLAYER_ENTERING_WORLD")
-    ResourceBar:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    self:RegisterEvent("PLAYER_ENTERING_WORLD")
+    self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 
-    -- If already enabled, register power events
+    -- If already enabled, register player-scoped power events
     if isEnabled then
-        ResourceBar:RegisterEvent("UNIT_POWER_UPDATE")
-        ResourceBar:RegisterEvent("UNIT_MAXPOWER")
+        self:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
+        self:RegisterUnitEvent("UNIT_MAXPOWER", "player")
     end
-end)
+
+    self:UnregisterEvent("ADDON_LOADED")
+end
+
+ResourceBar:RegisterEvent("ADDON_LOADED")
 
 -- Export
 _G.SidekickResourceBar = ResourceBar

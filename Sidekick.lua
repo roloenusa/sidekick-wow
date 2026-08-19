@@ -40,13 +40,9 @@ local addonLoaded = false
 local WARNING_COOLDOWN = 3        -- seconds between warnings
 local EDGE_GRADIENT_SIZE = 120    -- Size of edge gradients in pixels
 
--- Health thresholds as FRACTIONS (0.0 - 1.0), matching the curve range used by
--- Cell's Midnight code. The glow is fully on at or below HEALTH_SHOW_THRESHOLD
+-- Health thresholds as FRACTIONS (0.0 - 1.0). UnitHealthPercent returns a
+-- normalized 0-1 value, so the glow is fully on at or below HEALTH_SHOW_THRESHOLD
 -- and fades out to nothing by HEALTH_HIDE_THRESHOLD.
---
--- NOTE: If UnitHealthPercent turns out to feed the curve a 0-100 value instead
--- of 0-1, the glow will trigger at the wrong point. If that happens in-game,
--- change these two lines to 10 and 12.
 local HEALTH_SHOW_THRESHOLD = 0.10
 local HEALTH_HIDE_THRESHOLD = 0.12
 
@@ -97,10 +93,14 @@ local DPS_SPECS = {
 -- Secret Value Helpers
 -------------------------------------------------------------------------------
 
+-- issecretvalue may not exist on pre-12.0 clients; alias it to a no-op so the
+-- same file loads everywhere. Guarding with issecretvalue is preferred over
+-- pcall, which carries roughly 10x the overhead of this native check.
+local issecretvalue = issecretvalue or function() return false end
+
 -- True if the value is a Midnight "secret value" that we may not inspect.
--- issecretvalue itself is safe to call on any value and returns a plain boolean.
 local function IsSecret(value)
-    return issecretvalue and issecretvalue(value) or false
+    return issecretvalue(value)
 end
 
 -- True if the curve-based health display API is available (Midnight 12.0+).
@@ -266,9 +266,9 @@ local function UpdateGlow()
         return
     end
 
-    -- A dead target should never glow. UnitIsDead may be secret in restricted
-    -- content; only act on it when we can actually read it.
-    local isDead = UnitIsDead("target")
+    -- A dead target should never glow. UnitIsDeadOrGhost may be secret in
+    -- restricted content; only act on it when we can actually read it.
+    local isDead = UnitIsDeadOrGhost("target")
     if not IsSecret(isDead) and isDead then
         HideGlow()
         ShowTargetWarning()
@@ -278,7 +278,7 @@ local function UpdateGlow()
     -- Drive the glow alpha from the (possibly secret) health percent via the
     -- curve. SetAlpha accepts secret values; we never see the number ourselves.
     edgeFrame:Show()
-    edgeFrame:SetAlpha(UnitHealthPercent("target", false, lowHealthCurve))
+    edgeFrame:SetAlpha(UnitHealthPercent("target", true, lowHealthCurve))
 end
 
 -------------------------------------------------------------------------------
@@ -292,13 +292,11 @@ local function RegisterCombatEvents()
 
     Sidekick:RegisterEvent("PLAYER_TARGET_CHANGED")
     Sidekick:RegisterUnitEvent("UNIT_HEALTH", "target")
-    Sidekick:RegisterEvent("UNIT_DIED")
 end
 
 local function UnregisterCombatEvents()
     Sidekick:UnregisterEvent("PLAYER_TARGET_CHANGED")
     Sidekick:UnregisterEvent("UNIT_HEALTH")
-    Sidekick:UnregisterEvent("UNIT_DIED")
 end
 
 local function UpdateEventRegistration()
@@ -389,28 +387,9 @@ function Sidekick:UNIT_HEALTH(unit)
     UpdateGlow()
 end
 
--- UNIT_DIED replaces the old COMBAT_LOG_EVENT_UNFILTERED path, which now errors
--- when registered under Midnight. The payload is the GUID of the unit that died.
-function Sidekick:UNIT_DIED(unitGUID)
-    if not isEnabled then
-        return
-    end
-
-    local targetGUID = UnitGUID("target")
-
-    -- GUIDs can be secret in restricted content; do not compare them if so.
-    -- UNIT_HEALTH / PLAYER_TARGET_CHANGED will still correct the glow.
-    if IsSecret(unitGUID) or IsSecret(targetGUID) then
-        return
-    end
-
-    if targetGUID and unitGUID == targetGUID then
-        HideGlow()
-        if inCombat and isDPSSpec then
-            ShowTargetWarning()
-        end
-    end
-end
+-- Target death needs no dedicated event: UNIT_HEALTH fires as the target dies
+-- and UpdateGlow hides the glow through its UnitIsDeadOrGhost guard. There is no
+-- registerable UNIT_DIED event, and COMBAT_LOG_EVENT_UNFILTERED errors on 12.0.
 
 function Sidekick:UI_SCALE_CHANGED()
     UpdateEdgeFrameSize()
