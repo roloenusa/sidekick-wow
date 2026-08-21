@@ -14,6 +14,9 @@
 -------------------------------------------------------------------------------
 -- Addon Declaration
 -------------------------------------------------------------------------------
+local addonName, ns = ...
+ns = ns or {}
+
 local ADDON_NAME = "Sidekick"
 local Sidekick = CreateFrame("Frame", "SidekickFrame")
 Sidekick:SetScript("OnEvent", function(self, event, ...)
@@ -93,15 +96,16 @@ local DPS_SPECS = {
 -- Secret Value Helpers
 -------------------------------------------------------------------------------
 
--- issecretvalue may not exist on pre-12.0 clients; alias it to a no-op so the
--- same file loads everywhere. Guarding with issecretvalue is preferred over
--- pcall, which carries roughly 10x the overhead of this native check.
-local issecretvalue = issecretvalue or function() return false end
-
--- True if the value is a Midnight "secret value" that we may not inspect.
-local function IsSecret(value)
-    return issecretvalue(value)
+-- Shared across Sidekick's files via the addon namespace. issecretvalue may not
+-- exist on pre-12.0 clients, so alias it to a no-op. Guarding with issecretvalue
+-- is preferred over pcall, which carries roughly 10x the overhead of a native check.
+if not ns.IsSecret then
+    local issecretvalue = issecretvalue or function() return false end
+    function ns.IsSecret(value)
+        return issecretvalue(value)
+    end
 end
+local IsSecret = ns.IsSecret
 
 -- True if the curve-based health display API is available (Midnight 12.0+).
 local function HasHealthCurveAPI()
@@ -450,6 +454,30 @@ SlashCmdList["SIDEKICK"] = function(msg)
         end
         UpdateEventRegistration()
 
+    elseif cmd == "test" or cmd == "debug" then
+        print("|cFF00FF00Sidekick diagnostics:|r")
+        print("  Enabled: " .. tostring(isEnabled))
+        print("  DPS spec: " .. tostring(isDPSSpec))
+        print("  In combat: " .. tostring(inCombat))
+        print("  Health curve API: " .. tostring(HasHealthCurveAPI()))
+        print("  Curve built: " .. tostring(lowHealthCurve ~= nil))
+        print("  Edge frame ready: " .. tostring(edgeFrame ~= nil))
+
+        if edgeFrame then
+            print("|cFFFFFF00Forcing the glow ON for 5 seconds...|r")
+            edgeFrame:Show()
+            edgeFrame:SetAlpha(1)
+            C_Timer.After(5, function()
+                -- Leave a real combat glow alone; only clear the forced test glow
+                if not inCombat then
+                    edgeFrame:SetAlpha(0)
+                    edgeFrame:Hide()
+                end
+            end)
+        else
+            print("|cFFFF0000Edge frame not created yet. Try /reload.|r")
+        end
+
     -- Resource Bar Commands
     elseif cmd == "rb" or cmd == "resourcebar" then
         local subcmd = args[2] and args[2]:lower() or ""
@@ -565,6 +593,16 @@ SlashCmdList["SIDEKICK"] = function(msg)
                 print("|cFFFF0000Resource Bar module not loaded|r")
             end
 
+        elseif subcmd == "anchor" then
+            -- /sk rb anchor <frameName|auto>
+            local target = args[3]
+            if SidekickResourceBar then
+                SidekickResourceBar:SetAnchor(target)
+                print("|cFF00FF00Resource Bar anchor set to: " .. (target or "auto") .. "|r")
+            else
+                print("|cFFFF0000Resource Bar module not loaded|r")
+            end
+
         elseif subcmd == "status" then
             if not SidekickResourceBar or not SidekickDB or not SidekickDB.resourceBar then
                 print("|cFFFF0000Resource Bar module not loaded or not initialized|r")
@@ -573,6 +611,7 @@ SlashCmdList["SIDEKICK"] = function(msg)
 
             print("|cFF00FF00Resource Bar Status:|r")
             print("  Enabled: " .. (SidekickDB.resourceBar.enabled and "|cFF00FF00Yes|r" or "|cFFFF0000No|r"))
+            print("  Anchor: " .. (SidekickDB.resourceBar.anchor or "auto"))
             print("  Markers: " .. (SidekickResourceBar:IsFeatureEnabled("markers") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
             print("  Colors: " .. (SidekickResourceBar:IsFeatureEnabled("colors") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
             print("  Highlights: " .. (SidekickResourceBar:IsFeatureEnabled("highlights") and "|cFF00FF00On|r" or "|cFFFF0000Off|r"))
@@ -585,6 +624,7 @@ SlashCmdList["SIDEKICK"] = function(msg)
             print("/sk rb remove <index> - Remove threshold")
             print("/sk rb clear - Clear all thresholds")
             print("/sk rb list - List all thresholds")
+            print("/sk rb anchor <frameName|auto> - Choose which bar to attach to")
             print("/sk rb markers - Toggle threshold markers")
             print("/sk rb colors - Toggle dynamic bar colors")
             print("/sk rb highlights - Toggle threshold highlights")
@@ -595,6 +635,7 @@ SlashCmdList["SIDEKICK"] = function(msg)
     else
         print("|cFF00FF00Sidekick Commands:|r")
         print("/sk toggle - Enable/disable target alerts")
+        print("/sk test - Show diagnostics and force the glow on for 5s")
         print("/sk rb - Resource bar customization (see /sk rb for details)")
     end
 end

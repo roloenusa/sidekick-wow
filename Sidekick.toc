@@ -1,10 +1,9 @@
-## Interface: 120100, 120007
+## Interface: 120100, 120007, 120005
 ## Title: Sidekick
 ## Notes: Alerts DPS players to target enemies and shows when targets are low health
 ## Author: Sodastereo
 ## Version: 3.0.0
 ## SavedVariables: SidekickDB
 
-Sidekick.xml
 Sidekick.lua
 ResourceBar.lua

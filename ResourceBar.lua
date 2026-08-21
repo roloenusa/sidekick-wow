@@ -13,6 +13,9 @@
 -------------------------------------------------------------------------------
 -- Module Declaration
 -------------------------------------------------------------------------------
+local addonName, ns = ...
+ns = ns or {}
+
 local ResourceBar = CreateFrame("Frame", "SidekickResourceBarFrame")
 ResourceBar:SetScript("OnEvent", function(self, event, ...)
     if self[event] then
@@ -24,12 +27,16 @@ end)
 -- Local State
 -------------------------------------------------------------------------------
 local powerBarFrame = nil
+local overlayFrame = nil
 local markerFrames = {}
 local highlightFrame = nil
 local originalBarColor = {}
 local isEnabled = false
 local isInitialized = false
 local moduleLoaded = false
+
+-- Guards reentrancy when our own SetStatusBarColor call triggers the color hook.
+local applyingColor = false
 
 -- Retry tracking for frame finding
 local findFrameAttempts = 0
@@ -46,17 +53,16 @@ local FEATURE_HIGHLIGHTS = "highlights"
 -- Secret Value Helper
 -------------------------------------------------------------------------------
 
--- issecretvalue may not exist on pre-12.0 clients; alias it to a no-op so the
--- same file loads everywhere. Prefer this guard over pcall, which carries
--- roughly 10x the overhead of a native check.
-local issecretvalue = issecretvalue or function() return false end
-
--- True if the value is a Midnight "secret value" we may not inspect. Arithmetic
--- or comparison on such a value is an immediate Lua error, so callers guard with
--- this before doing math on a power reading.
-local function IsSecret(value)
-    return issecretvalue(value)
+-- Shared across Sidekick's files via the addon namespace. issecretvalue may not
+-- exist on pre-12.0 clients, so alias it to a no-op. Guarding with issecretvalue
+-- is preferred over pcall, which carries roughly 10x the overhead of a native check.
+if not ns.IsSecret then
+    local issecretvalue = issecretvalue or function() return false end
+    function ns.IsSecret(value)
+        return issecretvalue(value)
+    end
 end
+local IsSecret = ns.IsSecret
 
 -------------------------------------------------------------------------------
 -- Database Helpers
@@ -71,6 +77,7 @@ local function EnsureDatabase()
     if not SidekickDB.resourceBar then
         SidekickDB.resourceBar = {
             enabled = false,
+            anchor = "auto",
             features = {
                 [FEATURE_MARKERS] = true,
                 [FEATURE_COLORS] = true,
@@ -78,6 +85,11 @@ local function EnsureDatabase()
             },
             thresholds = {}
         }
+    end
+
+    -- Ensure anchor exists for databases created before this option
+    if not SidekickDB.resourceBar.anchor then
+        SidekickDB.resourceBar.anchor = "auto"
     end
 
     -- Ensure features table exists
@@ -209,6 +221,42 @@ local function FindPowerBarFrame()
     return nil
 end
 
+-- Resolve which bar to attach to: an explicit user-chosen frame by global name,
+-- otherwise the auto-detected Blizzard power bar. This is what lets the overlay
+-- be pointed at a different bar (for example one provided by another addon).
+local function ResolveTargetBar()
+    local anchor = SidekickDB and SidekickDB.resourceBar and SidekickDB.resourceBar.anchor
+    if anchor and anchor ~= "auto" then
+        local frame = _G[anchor]
+        if frame then
+            return frame
+        end
+    end
+    return FindPowerBarFrame()
+end
+
+-- Our markers and highlight live on this overlay, anchored over the target bar,
+-- so we never add child regions to Blizzard's protected frame (a taint vector).
+local function EnsureOverlay()
+    if overlayFrame then
+        return overlayFrame
+    end
+    overlayFrame = CreateFrame("Frame", "SidekickResourceOverlay", UIParent)
+    overlayFrame:SetFrameStrata("HIGH")
+    return overlayFrame
+end
+
+-- Apply a bar color through a reentrancy guard so our own call does not recurse
+-- through the SetStatusBarColor hook installed in Initialize.
+local function SetBarColor(r, g, b)
+    if not powerBarFrame or not powerBarFrame.SetStatusBarColor then
+        return
+    end
+    applyingColor = true
+    powerBarFrame:SetStatusBarColor(r, g, b)
+    applyingColor = false
+end
+
 -------------------------------------------------------------------------------
 -- Marker Management
 -------------------------------------------------------------------------------
@@ -252,7 +300,7 @@ local function UpdateMarkers()
     end
 
     local _, maxPower = GetPowerInfo()
-    if not powerBarFrame or IsSecret(maxPower) or maxPower == 0 then
+    if not powerBarFrame or not overlayFrame or IsSecret(maxPower) or maxPower == 0 then
         return
     end
 
@@ -261,17 +309,17 @@ local function UpdateMarkers()
         return
     end
 
-    -- Create new markers
+    -- Create new markers on our overlay, positioned across the target bar's width
     local thresholds = GetThresholds()
     for i, threshold in ipairs(thresholds) do
         if threshold and threshold.value then
             local percent = threshold.value / maxPower
-            local marker = CreateMarker(powerBarFrame, threshold)
+            local marker = CreateMarker(overlayFrame, threshold)
 
             if marker then
                 local xOffset = barWidth * percent
                 marker:ClearAllPoints()
-                marker:SetPoint("LEFT", powerBarFrame, "LEFT", xOffset, 0)
+                marker:SetPoint("LEFT", overlayFrame, "LEFT", xOffset, 0)
                 marker:Show()
                 markerFrames[i] = marker
             end
@@ -302,8 +350,8 @@ end
 
 -- Restore the power bar to its captured default color
 local function RestoreBarColor()
-    if powerBarFrame and powerBarFrame.SetStatusBarColor and originalBarColor.r then
-        powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
+    if originalBarColor.r then
+        SetBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
     end
 end
 
@@ -321,16 +369,14 @@ local function UpdateBarColor(currentPower)
     local activeThreshold = GetActiveThreshold(currentPower)
 
     if activeThreshold and activeThreshold.color then
-        powerBarFrame:SetStatusBarColor(
+        SetBarColor(
             activeThreshold.color.r or 1,
             activeThreshold.color.g or 1,
             activeThreshold.color.b or 1
         )
     else
         -- Restore original color when below all thresholds
-        if originalBarColor.r then
-            powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
-        end
+        RestoreBarColor()
     end
 end
 
@@ -344,16 +390,16 @@ local function CreateHighlightFrame()
         return highlightFrame
     end
 
-    if not powerBarFrame then
+    if not overlayFrame then
         return nil
     end
 
-    highlightFrame = CreateFrame("Frame", "SidekickResourceHighlight", powerBarFrame)
+    highlightFrame = CreateFrame("Frame", "SidekickResourceHighlight", overlayFrame)
     if not highlightFrame then
         return nil
     end
 
-    highlightFrame:SetAllPoints(powerBarFrame)
+    highlightFrame:SetAllPoints(overlayFrame)
     highlightFrame:SetFrameStrata("HIGH")
 
     -- Create glow texture
@@ -428,32 +474,74 @@ local function OnPowerUpdate()
     UpdateHighlight(currentPower)
 end
 
+-- Install a post-hook so our threshold color survives Blizzard's own updates to
+-- the bar, and so we never taint the frame by owning its color outright. The
+-- hook is a secure post-hook; the reentrancy guard stops our own reapply from
+-- looping back through it.
+local function HookBarColor()
+    if not powerBarFrame or powerBarFrame.__sidekickColorHooked then
+        return
+    end
+    if not hooksecurefunc or not powerBarFrame.SetStatusBarColor then
+        return
+    end
+
+    hooksecurefunc(powerBarFrame, "SetStatusBarColor", function()
+        if applyingColor or not isEnabled then
+            return
+        end
+        if not IsFeatureEnabled(FEATURE_COLORS) then
+            return
+        end
+
+        local currentPower = GetPowerInfo()
+        if IsSecret(currentPower) then
+            return
+        end
+
+        local active = GetActiveThreshold(currentPower)
+        if active and active.color then
+            SetBarColor(active.color.r or 1, active.color.g or 1, active.color.b or 1)
+        end
+    end)
+
+    powerBarFrame.__sidekickColorHooked = true
+end
+
 -- Initialize the resource bar customization
 local function Initialize()
     if isInitialized then
         return
     end
 
-    powerBarFrame = FindPowerBarFrame()
+    powerBarFrame = ResolveTargetBar()
 
     if not powerBarFrame then
         findFrameAttempts = findFrameAttempts + 1
 
         if findFrameAttempts < MAX_FIND_ATTEMPTS then
-            -- Try again in 1 second
+            -- Try again shortly; the target bar may not be laid out yet
             C_Timer.After(1, Initialize)
         else
             -- Give up after max attempts
-            print("|cFFFF0000Sidekick ResourceBar: Could not find power bar frame after " .. MAX_FIND_ATTEMPTS .. " attempts|r")
+            print("|cFFFF0000Sidekick ResourceBar: Could not find a bar to attach to after " .. MAX_FIND_ATTEMPTS .. " attempts|r")
         end
         return
     end
 
-    -- Store original bar color
+    -- Anchor our overlay over the target bar so markers/highlight never become
+    -- children of a protected frame
+    EnsureOverlay()
+    overlayFrame:SetAllPoints(powerBarFrame)
+    overlayFrame:Show()
+
+    -- Store original bar color for restore
     if powerBarFrame.GetStatusBarColor then
         local r, g, b, a = powerBarFrame:GetStatusBarColor()
         originalBarColor = {r = r, g = g, b = b, a = a}
     end
+
+    HookBarColor()
 
     isInitialized = true
     findFrameAttempts = 0
@@ -464,10 +552,8 @@ end
 
 -- Cleanup function
 local function Cleanup()
-    -- Restore original state
-    if powerBarFrame and powerBarFrame.SetStatusBarColor and originalBarColor.r then
-        powerBarFrame:SetStatusBarColor(originalBarColor.r, originalBarColor.g, originalBarColor.b)
-    end
+    -- Restore original bar color
+    RestoreBarColor()
 
     -- Hide markers
     for _, marker in pairs(markerFrames) do
@@ -480,6 +566,11 @@ local function Cleanup()
     -- Hide highlight
     if highlightFrame and highlightFrame.glow then
         highlightFrame.glow:SetAlpha(0)
+    end
+
+    -- Hide the overlay so nothing lingers over the bar
+    if overlayFrame then
+        overlayFrame:Hide()
     end
 
     isInitialized = false
@@ -522,31 +613,11 @@ function ResourceBar:PLAYER_SPECIALIZATION_CHANGED()
         return
     end
 
-    -- Power bar might change with spec
+    -- Power bar might change with spec; let Initialize re-resolve and re-anchor
     C_Timer.After(0.5, function()
-        -- Reset initialization state
         isInitialized = false
         powerBarFrame = nil
-
-        -- Re-find the power bar (it might have changed)
-        powerBarFrame = FindPowerBarFrame()
-
-        if powerBarFrame then
-            -- Re-capture original color after spec change
-            if powerBarFrame.GetStatusBarColor then
-                local r, g, b, a = powerBarFrame:GetStatusBarColor()
-                originalBarColor = {r = r, g = g, b = b, a = a}
-            end
-
-            isInitialized = true
-
-            -- Re-initialize markers and colors
-            UpdateMarkers()
-            OnPowerUpdate()
-        else
-            -- Try full initialization again
-            Initialize()
-        end
+        Initialize()
     end)
 end
 
@@ -618,6 +689,20 @@ function ResourceBar:SetEnabled(enabled)
         self:UnregisterEvent("UNIT_POWER_UPDATE")
         self:UnregisterEvent("UNIT_MAXPOWER")
         Cleanup()
+    end
+end
+
+-- Choose which bar the overlay attaches to. Pass a frame's global name to attach
+-- to that bar, or "auto"/nil to use the detected Blizzard power bar.
+function ResourceBar:SetAnchor(frameName)
+    EnsureDatabase()
+
+    SidekickDB.resourceBar.anchor = frameName or "auto"
+
+    -- Re-resolve against the new anchor
+    if isEnabled then
+        Cleanup()
+        Initialize()
     end
 end
 
